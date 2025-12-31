@@ -1,0 +1,34 @@
+{
+  "name": "tekton",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yonko2/Tekton.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/yonko2/Tekton/issues"
+  },
+  "homepage": "https://github.com/yonko2/Tekton#readme",
+  "dependencies": {
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/drawing_utils": "^0.3.1675466124",
+    "@mediapipe/hands": "^0.4.1675469240",
+    "three": "^0.182.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.182.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0"
+  }
+}

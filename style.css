@@ -1,0 +1,28 @@
+body {
+    margin: 0;
+    overflow: hidden;
+    background-color: #000;
+}
+
+#canvas-container {
+    width: 100vw;
+    height: 100vh;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+}
+
+#input-video {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 320px;
+    height: auto;
+    z-index: 2;
+    /* Mirror the video */
+    transform: scaleX(-1);
+    opacity: 1;
+    border-radius: 8px;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+}
