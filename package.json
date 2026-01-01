@@ -26,12 +26,17 @@
     "@mediapipe/hands": "^0.4.1675469240",
     "cannon-es": "^0.20.0",
     "lil-gui": "^0.21.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
     "three": "^0.182.0"
   },
   "devDependencies": {
     "@types/dat.gui": "^0.7.13",
     "@types/dom-speech-recognition": "^0.0.7",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
     "@types/three": "^0.182.0",
+    "@vitejs/plugin-react": "^5.1.2",
     "three-stdlib": "^2.36.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.0"
