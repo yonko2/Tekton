@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 export type SettingsModel = {
   zoom: number;
+  spawnShape: 'mixed' | 'circle' | 'box';
   gravity: number;
   floorHeight: number;
   bounciness: number;
@@ -43,12 +44,18 @@ export default function SettingsPanel({
     onChange(next);
   }
 
+  function setShape(value: SettingsModel['spawnShape']) {
+    const next = { ...draft, spawnShape: value };
+    setDraft(next);
+    onChange(next);
+  }
+
   return (
     <div id="panel" aria-label="Settings panel">
       <div className="header">
         <div style={{ display: 'grid', gap: 2 }}>
           <strong>Settings</strong>
-          <span className="hint">Scroll anywhere to zoom</span>
+          <span className="hint">Use the slider to zoom</span>
         </div>
         <button id="panel-toggle" type="button" onClick={onToggleOpen} aria-expanded={open}>
           {open ? 'Hide' : 'Show'}
@@ -63,6 +70,21 @@ export default function SettingsPanel({
           <button id="reset" type="button" onClick={onReset}>
             Reset
           </button>
+        </div>
+
+        <div className="row">
+          <label htmlFor="spawn-shape">Figure</label>
+          <div className="control">
+            <select
+              id="spawn-shape"
+              value={draft.spawnShape}
+              onChange={(e) => setShape(e.target.value as SettingsModel['spawnShape'])}
+            >
+              <option value="mixed">Mixed</option>
+              <option value="circle">Circles</option>
+              <option value="box">Boxes</option>
+            </select>
+          </div>
         </div>
 
         <div className="row">

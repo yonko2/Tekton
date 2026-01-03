@@ -29,12 +29,24 @@ export default function Scene({
     return () => {
       engine.unmount();
     };
-  }, [engine, onFirstResults, overlayCanvasRef, videoRef]);
+    // refs are stable objects; don't include them as dependencies
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, onFirstResults]);
 
   // Apply settings without remounting the MediaPipe graph.
   useEffect(() => {
     engine.applySettings(initialSettings);
-  }, [engine, initialSettings]);
+    // Only re-apply when values change (avoid object-identity churn).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    engine,
+    initialSettings.zoom,
+    initialSettings.spawnShape,
+    initialSettings.gravity,
+    initialSettings.floorHeight,
+    initialSettings.bounciness,
+    initialSettings.friction,
+  ]);
 
   return (
     <>

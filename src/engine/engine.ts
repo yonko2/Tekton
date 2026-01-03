@@ -20,18 +20,21 @@ export type Engine = {
   mount(args: EngineMountArgs): void;
   unmount(): void;
   applySettings(settings: EngineSettings): void;
+  addBody(shape: 'mixed' | 'circle' | 'box'): void;
   addRandomBody(): void;
   resetScene(): void;
 };
 
 const CONFIG = {
-  maxNumHands: 1,
-
-  perfLog: false,
+  maxNumHands: 2,
 
   // pinch in normalized landmark units
   pinchStart: 0.055,
   pinchEnd: 0.075,
+
+  // grasp (closed hand) in normalized landmark units (avg fingertip->MCP distance)
+  graspStart: 0.085,
+  graspEnd: 0.105,
 
   // visual style
   jointRadius: 6,
@@ -54,6 +57,32 @@ const CONFIG = {
     grabStiffness: 55, // spring strength
     grabDamping: 12, // velocity damping
     throwScale: 1.25,
+
+    // grab responsiveness
+    grabFollow: 0.9, // 0..1 velocity/position follow strength while grabbed
+    grabPosGain: 18, // 1/s extra velocity from position error
+    maxGrabSpeed: 5200, // world px/s
+
+    // throw stability
+    throwSmoothing: 0.35, // 0..1 (higher = more responsive)
+    maxThrowSpeed: 3600, // world px/s
+    throwBlend: 0.9, // 0..1 blend from current vel -> hand vel
+
+    // throw sampling window (more stable than single-frame velocity)
+    throwWindowMs: 140,
+    throwMinSamples: 2,
+
+    // playground
+    hoopEnabled: true,
+    hoopRestitution: 0.75,
+    hoopFriction: 0.25,
+
+    // hand/body interaction
+    handCollisions: true,
+    handPalmRadius: 58, // screen px (converted to world)
+    handPointRadius: 18, // screen px (converted to world)
+    handRestitution: 0.65,
+    throwHandIgnoreMs: 140, // ignore collisions with releasing hand briefly
   },
 } as const;
 
@@ -65,46 +94,98 @@ function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
+function clampVecMag(v: Point2, maxMag: number): Point2 {
+  const m2 = v.x * v.x + v.y * v.y;
+  if (m2 <= maxMag * maxMag) return v;
+  const m = Math.sqrt(Math.max(m2, 1e-12));
+  const s = maxMag / m;
+  return { x: v.x * s, y: v.y * s };
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function robustAverageVelocity(samples: Array<{ v: Point2; t: number }>, maxSpeed: number): Point2 {
+  if (samples.length === 0) return { x: 0, y: 0 };
+  if (samples.length === 1) return clampVecMag(samples[0].v, maxSpeed);
+
+  // Component-wise median to filter spikes.
+  const mx = median(samples.map((s) => s.v.x));
+  const my = median(samples.map((s) => s.v.y));
+
+  // Keep samples reasonably close to the median (robust trimming).
+  const filtered = samples.filter((s) => {
+    const dx = s.v.x - mx;
+    const dy = s.v.y - my;
+    return dx * dx + dy * dy <= (maxSpeed * 0.65) * (maxSpeed * 0.65);
+  });
+
+  const use = filtered.length > 0 ? filtered : samples;
+
+  // Weighted average favoring newer samples.
+  const tMax = use[use.length - 1].t;
+  let sumW = 0;
+  let sumX = 0;
+  let sumY = 0;
+  for (const s of use) {
+    const age = Math.max(0, tMax - s.t);
+    const w = Math.exp(-age / 70); // ~70ms half-life
+    sumW += w;
+    sumX += s.v.x * w;
+    sumY += s.v.y * w;
+  }
+
+  const out = {
+    x: sumW > 0 ? sumX / sumW : mx,
+    y: sumW > 0 ? sumY / sumW : my,
+  };
+  return clampVecMag(out, maxSpeed);
+}
+
+function smoothPoints(prev: Point2[] | null, next: Point2[], smoothing: number): Point2[] {
+  if (!prev || prev.length !== next.length) return next;
+  const s = Math.min(0.98, Math.max(0, smoothing));
+  const a = 1 - s;
+  return next.map((p, i) => ({
+    x: prev[i].x + (p.x - prev[i].x) * a,
+    y: prev[i].y + (p.y - prev[i].y) * a,
+  }));
+}
+
+function dist(a: Point2, b: Point2) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.hypot(dx, dy);
+}
+
 function randColor() {
   const palette = ['#00ffdf', '#00ff88', '#66ffff', '#ff3355', '#ffd166', '#a78bfa'];
   return palette[Math.floor(Math.random() * palette.length)];
 }
 
 export function createEngine(): Engine {
+  // DOM refs
   let overlay: HTMLCanvasElement | null = null;
   let ctx: CanvasRenderingContext2D | null = null;
   let video: HTMLVideoElement | null = null;
 
+  // MediaPipe
   let hands: Hands | null = null;
   let camera: Camera | null = null;
 
+  // animation
   let rafId: number | null = null;
   let running = false;
-  let mounted = false;
+  let lastT = 0;
 
-  // When zoom changes (wheel), we briefly pause MediaPipe sends to avoid triggering
-  // GPU delegate/context edge cases during rapid layout updates.
-  let pauseHandsUntil = 0;
-  let handsFatalError = false;
-
-  let hasFirstResults = false;
   let onFirstResultsCb: (() => void) | undefined;
+  let firstResultsEmitted = false;
 
-  // Perf counters (optional)
-  let lastResultsT = 0;
-  let lastPerfLogT = 0;
-  let lastSendDurationMs = 0;
-
-  // Settings (driven from React sliders)
-  const settings: EngineSettings = {
-    zoom: 1,
-    gravity: 2200,
-    floorHeight: 140,
-    bounciness: 0.45,
-    friction: 0.55,
-  };
-
-  // 2D camera (world -> screen)
+  // 2D camera (world -> screen). Zoom < 1 = zoom out
   const camera2d = {
     zoom: 1,
     centerWorld: { x: 0, y: 0 },
@@ -114,24 +195,96 @@ export function createEngine(): Engine {
   let nextId = 1;
   const bodies: PhysicsBody[] = [];
 
-  const pointer = {
-    pinch: null as Point2 | null,
-    prevPinch: null as Point2 | null,
-    pinchVel: { x: 0, y: 0 },
-    lastPinchT: 0,
+  type StaticCollider =
+    | { kind: 'circle'; pos: Point2; r: number; restitution: number; friction: number }
+    | {
+        kind: 'box';
+        pos: Point2;
+        size: { w: number; h: number };
+        restitution: number;
+        friction: number;
+      };
+
+  const playground = {
+    score: 0,
+    lastBodyY: new Map<number, number>(),
   };
 
-  const grab = {
-    activeId: null as number | null,
+  type PointerState = {
+    pinch: Point2 | null; // in SCREEN px
+    prevPinch: Point2 | null;
+    pinchVel: Point2; // in WORLD px/s
+    lastPinchT: number;
   };
 
-  function resetScene() {
-    // Do not auto-spawn on reset; clear only (user can spawn via panel)
-    bodies.length = 0;
-    nextId = 1;
-    // also drop any active grab
-    grab.activeId = null;
+  type HandState = {
+    pointer: PointerState;
+    grabActiveId: number | null;
+    lastLandmarksPx: Point2[] | null;
+    isPinching: boolean;
+    pinchPosPx: Point2 | null;
+
+    isGrasping: boolean;
+    palmPosPx: Point2 | null;
+    grabPosPx: Point2 | null;
+
+    // Recent grab-point velocities for robust throws
+    throwSamples: Array<{ v: Point2; t: number }>;
+
+    // Kinematic colliders in WORLD space (for bouncing bodies off the hand)
+    colliders: Array<{ handIndex: number; pos: Point2; vel: Point2; r: number }>;
+    prevColliderPos: Array<Point2>;
+  };
+
+  const handsState: HandState[] = Array.from({ length: CONFIG.maxNumHands }, () => ({
+    pointer: {
+      pinch: null,
+      prevPinch: null,
+      pinchVel: { x: 0, y: 0 },
+      lastPinchT: 0,
+    },
+    grabActiveId: null,
+    lastLandmarksPx: null,
+    isPinching: false,
+    pinchPosPx: null,
+
+    isGrasping: false,
+    palmPosPx: null,
+    grabPosPx: null,
+
+    throwSamples: [],
+
+    colliders: [],
+    prevColliderPos: [],
+  }));
+
+  // bodyId -> (handIndex -> ignoreUntilMs)
+  const handCollisionIgnoreUntil = new Map<number, Map<number, number>>();
+
+  function setHandCollisionIgnore(bodyId: number, handIndex: number, untilMs: number) {
+    let byHand = handCollisionIgnoreUntil.get(bodyId);
+    if (!byHand) {
+      byHand = new Map<number, number>();
+      handCollisionIgnoreUntil.set(bodyId, byHand);
+    }
+    byHand.set(handIndex, untilMs);
   }
+
+  function shouldIgnoreHandCollision(bodyId: number, handIndex: number, nowMs: number): boolean {
+    const byHand = handCollisionIgnoreUntil.get(bodyId);
+    if (!byHand) return false;
+    const until = byHand.get(handIndex);
+    return until != null && nowMs < until;
+  }
+
+  function grabbedIds(): Set<number> {
+    const s = new Set<number>();
+    for (const hs of handsState) if (hs.grabActiveId != null) s.add(hs.grabActiveId);
+    return s;
+  }
+
+  // Voice
+  let recognition: SpeechRecognition | null = null;
 
   function screenToWorld(p: Point2): Point2 {
     return {
@@ -140,18 +293,12 @@ export function createEngine(): Engine {
     };
   }
 
-  function worldToScreen(p: Point2): Point2 {
-    return {
-      x: (p.x - camera2d.centerWorld.x) * camera2d.zoom + window.innerWidth / 2,
-      y: (p.y - camera2d.centerWorld.y) * camera2d.zoom + window.innerHeight / 2,
-    };
-  }
-
-  function applyCameraTransform(ctx2d: CanvasRenderingContext2D) {
+  function applyCameraTransform() {
+    if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
     const z = camera2d.zoom;
 
-    ctx2d.setTransform(
+    ctx.setTransform(
       dpr * z,
       0,
       0,
@@ -161,13 +308,62 @@ export function createEngine(): Engine {
     );
   }
 
-  function resetCanvasTransform(ctx2d: CanvasRenderingContext2D) {
+  function resetCanvasTransform() {
+    if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function addRandomBody() {
-    const isCircle = Math.random() < 0.6;
+  function resizeOverlay() {
+    if (!overlay || !ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    overlay.width = Math.floor(window.innerWidth * dpr);
+    overlay.height = Math.floor(window.innerHeight * dpr);
+    overlay.style.width = `${window.innerWidth}px`;
+    overlay.style.height = `${window.innerHeight}px`;
+
+    // First match device pixels; draw loop will apply camera transform afterwards
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function toScreenPoint(lm: any): Point2 {
+    // Keep hand in SCREEN coordinates (match the mirrored webcam feel)
+    return {
+      x: (1 - lm.x) * window.innerWidth,
+      y: lm.y * window.innerHeight,
+    };
+  }
+
+  function getBodyById(id: number | null) {
+    if (id == null) return null;
+    return bodies.find((b) => b.id === id) ?? null;
+  }
+
+  function isBodyGrabbedByOtherHand(bodyId: number, handIndex: number): boolean {
+    for (let i = 0; i < handsState.length; i++) {
+      if (i === handIndex) continue;
+      if (handsState[i].grabActiveId === bodyId) return true;
+    }
+    return false;
+  }
+
+  function bodyPickDistance(b: PhysicsBody, p: Point2): number {
+    if (b.kind === 'circle') {
+      return dist(b.pos, p) - (b.radius ?? 0);
+    }
+
+    const w = b.size!.w;
+    const h = b.size!.h;
+    const dx = Math.max(Math.abs(p.x - b.pos.x) - w / 2, 0);
+    const dy = Math.max(Math.abs(p.y - b.pos.y) - h / 2, 0);
+    return Math.hypot(dx, dy);
+  }
+
+  function addBody(shape: 'mixed' | 'circle' | 'box' = 'mixed') {
+    const isCircle =
+      shape === 'circle' ? true : shape === 'box' ? false : Math.random() < 0.6;
+
+    // spawn near top-center in WORLD space
     const spawnW = screenToWorld({ x: window.innerWidth / 2, y: 80 });
 
     if (isCircle) {
@@ -179,7 +375,7 @@ export function createEngine(): Engine {
         vel: { x: (Math.random() - 0.5) * 220, y: 0 },
         radius: r,
         color: randColor(),
-        restitution: settings.bounciness,
+        restitution: settings.restitution,
         friction: settings.friction,
         mass: 1,
       });
@@ -193,64 +389,24 @@ export function createEngine(): Engine {
         vel: { x: (Math.random() - 0.5) * 220, y: 0 },
         size: { w, h },
         color: randColor(),
-        restitution: settings.bounciness,
+        restitution: settings.restitution * 0.8,
         friction: settings.friction,
         mass: 1.2,
       });
     }
   }
 
-  function getBodyById(id: number | null) {
-    if (id == null) return null;
-    return bodies.find((b) => b.id === id) ?? null;
+  function addRandomBody() {
+    addBody('mixed');
   }
 
-  function dist(a: Point2, b: Point2) {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return Math.hypot(dx, dy);
-  }
-
-  function bodyPickDistance(b: PhysicsBody, p: Point2): number {
-    if (b.kind === 'circle') {
-      return dist(b.pos, p) - (b.radius ?? 0);
-    }
-
-    // distance to AABB (axis-aligned box)
-    const w = b.size!.w;
-    const h = b.size!.h;
-    const dx = Math.max(Math.abs(p.x - b.pos.x) - w / 2, 0);
-    const dy = Math.max(Math.abs(p.y - b.pos.y) - h / 2, 0);
-    return Math.hypot(dx, dy);
-  }
-
-  function tryStartGrab() {
-    // pinch is in SCREEN space; convert to WORLD
-    if (!pointer.pinch || grab.activeId != null) return;
-
-    const pinchW = screenToWorld(pointer.pinch);
-
-    let best: { b: PhysicsBody; d: number } | null = null;
-    for (const b of bodies) {
-      const d = bodyPickDistance(b, pinchW);
-      if (d < CONFIG.physics.grabRadius / camera2d.zoom && (!best || d < best.d)) {
-        best = { b, d };
-      }
-    }
-
-    if (best) grab.activeId = best.b.id;
-  }
-
-  function endGrab() {
-    const b = getBodyById(grab.activeId);
-    grab.activeId = null;
-
-    // On release: throw with pinch velocity (pinchVel is in screen px/s). Convert to world units.
-    if (b) {
-      const scale = CONFIG.physics.throwScale / camera2d.zoom;
-      b.vel.x += pointer.pinchVel.x * scale;
-      b.vel.y += pointer.pinchVel.y * scale;
-    }
+  function resetScene() {
+    bodies.length = 0;
+    nextId = 1;
+    for (const hs of handsState) hs.grabActiveId = null;
+    handCollisionIgnoreUntil.clear();
+    playground.score = 0;
+    playground.lastBodyY.clear();
   }
 
   function floorY() {
@@ -260,20 +416,336 @@ export function createEngine(): Engine {
     return bottomWorldY - floorHWorld;
   }
 
-  // New helper: resolve collisions between bodies (position correction + impulse)
-  function resolveBodyCollisions() {
-    // Simple, stable-ish impulse solver for small body counts.
-    // Assumes axis-aligned boxes (no rotation).
+  function getHoopRig(): {
+    colliders: StaticCollider[];
+    rimCenter: Point2;
+    rimR: number;
+    sensor: { x1: number; x2: number; yTop: number; yBottom: number };
+  } {
+    // Anchor hoop to the screen so it feels like a "playground".
+    // Put it on the right, but shifted left so it doesn't hide under the Settings panel.
+    const rimCenterS = {
+      x: clamp(window.innerWidth - 420, 160, window.innerWidth - 160),
+      y: clamp(220, 120, window.innerHeight - 220),
+    };
+    const rimCenter = screenToWorld(rimCenterS);
+    const rimR = 42 / camera2d.zoom;
+    const rimThickness = 10 / camera2d.zoom;
 
+    const backboardW = 18 / camera2d.zoom;
+    const backboardH = 140 / camera2d.zoom;
+    const backboard: StaticCollider = {
+      kind: 'box',
+      pos: { x: rimCenter.x + rimR + backboardW * 0.6, y: rimCenter.y - 40 / camera2d.zoom },
+      size: { w: backboardW, h: backboardH },
+      restitution: CONFIG.physics.hoopRestitution,
+      friction: CONFIG.physics.hoopFriction,
+    };
+
+    const rimLeft: StaticCollider = {
+      kind: 'circle',
+      pos: { x: rimCenter.x - rimR, y: rimCenter.y },
+      r: rimThickness * 0.9,
+      restitution: CONFIG.physics.hoopRestitution,
+      friction: CONFIG.physics.hoopFriction,
+    };
+    const rimRight: StaticCollider = {
+      kind: 'circle',
+      pos: { x: rimCenter.x + rimR, y: rimCenter.y },
+      r: rimThickness * 0.9,
+      restitution: CONFIG.physics.hoopRestitution,
+      friction: CONFIG.physics.hoopFriction,
+    };
+    const rimFront: StaticCollider = {
+      kind: 'circle',
+      pos: { x: rimCenter.x, y: rimCenter.y },
+      r: rimThickness * 0.85,
+      restitution: CONFIG.physics.hoopRestitution,
+      friction: CONFIG.physics.hoopFriction,
+    };
+    const rimBar: StaticCollider = {
+      kind: 'box',
+      pos: { x: rimCenter.x, y: rimCenter.y - rimThickness * 0.35 },
+      size: { w: rimR * 2.05, h: rimThickness * 0.6 },
+      restitution: CONFIG.physics.hoopRestitution,
+      friction: CONFIG.physics.hoopFriction,
+    };
+
+    // Sensor zone: score if a circle passes downward through the opening.
+    const sensorW = rimR * 1.6;
+    const sensorH = 44 / camera2d.zoom;
+    const sensor = {
+      x1: rimCenter.x - sensorW / 2,
+      x2: rimCenter.x + sensorW / 2,
+      yTop: rimCenter.y + rimThickness * 0.6,
+      yBottom: rimCenter.y + sensorH,
+    };
+
+    return {
+      colliders: [backboard, rimLeft, rimRight, rimFront, rimBar],
+      rimCenter,
+      rimR,
+      sensor,
+    };
+  }
+
+  function resolveBodyVsStatic(b: PhysicsBody, s: StaticCollider) {
+    if (s.kind === 'circle') {
+      const sx = s.pos.x;
+      const sy = s.pos.y;
+      const sr = s.r;
+
+      if (b.kind === 'circle') {
+        const br = b.radius ?? 0;
+        const dx = b.pos.x - sx;
+        const dy = b.pos.y - sy;
+        const d2 = dx * dx + dy * dy;
+        const minD = br + sr;
+        if (d2 >= minD * minD) return;
+
+        const d = Math.sqrt(Math.max(d2, 1e-9));
+        const nx = dx / d;
+        const ny = dy / d;
+        const penetration = minD - d;
+        b.pos.x += nx * penetration;
+        b.pos.y += ny * penetration;
+
+        const velAlongNormal = b.vel.x * nx + b.vel.y * ny;
+        if (velAlongNormal < 0) {
+          const e = Math.min(b.restitution, s.restitution);
+          const j = -(1 + e) * velAlongNormal;
+          b.vel.x += j * nx;
+          b.vel.y += j * ny;
+
+          const tx = -ny;
+          const ty = nx;
+          const vt = b.vel.x * tx + b.vel.y * ty;
+          const mu = (b.friction + s.friction) * 0.5;
+          b.vel.x -= vt * tx * mu * 0.12;
+          b.vel.y -= vt * ty * mu * 0.12;
+        }
+        return;
+      }
+
+      // box vs static circle
+      const hw = b.size!.w / 2;
+      const hh = b.size!.h / 2;
+      const closestX = Math.max(b.pos.x - hw, Math.min(sx, b.pos.x + hw));
+      const closestY = Math.max(b.pos.y - hh, Math.min(sy, b.pos.y + hh));
+      const dx = sx - closestX;
+      const dy = sy - closestY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= sr * sr) return;
+
+      const d = Math.sqrt(Math.max(d2, 1e-9));
+      let nx = -dx / d;
+      let ny = -dy / d;
+      if (!isFinite(nx) || !isFinite(ny)) {
+        const px = b.pos.x - sx;
+        const py = b.pos.y - sy;
+        if (Math.abs(px / hw) > Math.abs(py / hh)) {
+          nx = px > 0 ? 1 : -1;
+          ny = 0;
+        } else {
+          nx = 0;
+          ny = py > 0 ? 1 : -1;
+        }
+      }
+
+      const penetration = sr - d;
+      b.pos.x += nx * penetration;
+      b.pos.y += ny * penetration;
+
+      const velAlongNormal = b.vel.x * nx + b.vel.y * ny;
+      if (velAlongNormal < 0) {
+        const e = Math.min(b.restitution, s.restitution);
+        const j = -(1 + e) * velAlongNormal;
+        b.vel.x += j * nx;
+        b.vel.y += j * ny;
+
+        const tx = -ny;
+        const ty = nx;
+        const vt = b.vel.x * tx + b.vel.y * ty;
+        const mu = (b.friction + s.friction) * 0.5;
+        b.vel.x -= vt * tx * mu * 0.12;
+        b.vel.y -= vt * ty * mu * 0.12;
+      }
+      return;
+    }
+
+    // static box
+    const hw = s.size.w / 2;
+    const hh = s.size.h / 2;
+    const x1 = s.pos.x - hw;
+    const x2 = s.pos.x + hw;
+    const y1 = s.pos.y - hh;
+    const y2 = s.pos.y + hh;
+
+    if (b.kind === 'circle') {
+      const r = b.radius ?? 0;
+      const closestX = Math.max(x1, Math.min(b.pos.x, x2));
+      const closestY = Math.max(y1, Math.min(b.pos.y, y2));
+      const dx = b.pos.x - closestX;
+      const dy = b.pos.y - closestY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= r * r) return;
+
+      const d = Math.sqrt(Math.max(d2, 1e-9));
+      let nx = dx / d;
+      let ny = dy / d;
+      if (!isFinite(nx) || !isFinite(ny)) {
+        // Push out along shallowest axis
+        const left = Math.abs(b.pos.x - x1);
+        const right = Math.abs(x2 - b.pos.x);
+        const top = Math.abs(b.pos.y - y1);
+        const bottom = Math.abs(y2 - b.pos.y);
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) {
+          nx = -1;
+          ny = 0;
+        } else if (m === right) {
+          nx = 1;
+          ny = 0;
+        } else if (m === top) {
+          nx = 0;
+          ny = -1;
+        } else {
+          nx = 0;
+          ny = 1;
+        }
+      }
+
+      const penetration = r - d;
+      b.pos.x += nx * penetration;
+      b.pos.y += ny * penetration;
+
+      const velAlongNormal = b.vel.x * nx + b.vel.y * ny;
+      if (velAlongNormal < 0) {
+        const e = Math.min(b.restitution, s.restitution);
+        const j = -(1 + e) * velAlongNormal;
+        b.vel.x += j * nx;
+        b.vel.y += j * ny;
+
+        const tx = -ny;
+        const ty = nx;
+        const vt = b.vel.x * tx + b.vel.y * ty;
+        const mu = (b.friction + s.friction) * 0.5;
+        b.vel.x -= vt * tx * mu * 0.12;
+        b.vel.y -= vt * ty * mu * 0.12;
+      }
+      return;
+    }
+
+    // box vs static box (AABB)
+    const bw = b.size!.w;
+    const bh = b.size!.h;
+    const bx1 = b.pos.x - bw / 2;
+    const bx2 = b.pos.x + bw / 2;
+    const by1 = b.pos.y - bh / 2;
+    const by2 = b.pos.y + bh / 2;
+    if (!(bx1 < x2 && bx2 > x1 && by1 < y2 && by2 > y1)) return;
+
+    const overlapX = Math.min(bx2 - x1, x2 - bx1);
+    const overlapY = Math.min(by2 - y1, y2 - by1);
+    if (overlapX < overlapY) {
+      const nx = b.pos.x < s.pos.x ? -1 : 1;
+      b.pos.x += nx * overlapX;
+      if (b.vel.x * nx < 0) b.vel.x = -b.vel.x * Math.min(b.restitution, s.restitution);
+      b.vel.y *= 1 - ((b.friction + s.friction) * 0.5) * 0.04;
+    } else {
+      const ny = b.pos.y < s.pos.y ? -1 : 1;
+      b.pos.y += ny * overlapY;
+      if (b.vel.y * ny < 0) b.vel.y = -b.vel.y * Math.min(b.restitution, s.restitution);
+      b.vel.x *= 1 - ((b.friction + s.friction) * 0.5) * 0.04;
+    }
+  }
+
+  function resolveHoopCollisions() {
+    if (!CONFIG.physics.hoopEnabled) return;
+    const rig = getHoopRig();
+
+    for (let pass = 0; pass < 2; pass++) {
+      for (const b of bodies) {
+        for (const s of rig.colliders) resolveBodyVsStatic(b, s);
+      }
+    }
+
+    // Scoring: count circles that pass downward through the sensor window
+    for (const b of bodies) {
+      if (b.kind !== 'circle') continue;
+      const prevY = playground.lastBodyY.get(b.id);
+      playground.lastBodyY.set(b.id, b.pos.y);
+      if (prevY == null) continue;
+
+      const x = b.pos.x;
+      const y = b.pos.y;
+      const wasAbove = prevY < rig.sensor.yTop;
+      const nowBelow = y > rig.sensor.yBottom;
+      const within = x >= rig.sensor.x1 && x <= rig.sensor.x2;
+      if (wasAbove && nowBelow && within) {
+        playground.score += 1;
+      }
+    }
+  }
+
+  function drawHoop() {
+    if (!ctx) return;
+    if (!CONFIG.physics.hoopEnabled) return;
+    const rig = getHoopRig();
+
+    ctx.save();
+
+    // Backboard
+    const backboard = rig.colliders.find((c) => c.kind === 'box') as
+      | Extract<StaticCollider, { kind: 'box' }>
+      | undefined;
+    if (backboard) {
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 3 / camera2d.zoom;
+      ctx.beginPath();
+      ctx.rect(
+        backboard.pos.x - backboard.size.w / 2,
+        backboard.pos.y - backboard.size.h / 2,
+        backboard.size.w,
+        backboard.size.h
+      );
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Rim
+    ctx.strokeStyle = 'rgba(255, 140, 40, 0.95)';
+    ctx.lineWidth = 6 / camera2d.zoom;
+    ctx.beginPath();
+    ctx.arc(rig.rimCenter.x, rig.rimCenter.y, rig.rimR, Math.PI * 0.06, Math.PI - Math.PI * 0.06);
+    ctx.stroke();
+
+    // Simple net lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+    ctx.lineWidth = 1.5 / camera2d.zoom;
+    const netTopY = rig.sensor.yTop;
+    const netBottomY = rig.sensor.yBottom;
+    for (let i = -3; i <= 3; i++) {
+      const x = rig.rimCenter.x + (i / 3) * (rig.rimR * 0.65);
+      ctx.beginPath();
+      ctx.moveTo(x, netTopY);
+      ctx.lineTo(x + (i % 2 === 0 ? 1 : -1) * (rig.rimR * 0.08), netBottomY);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function resolveBodyCollisions() {
+    const grabbed = grabbedIds();
     const n = bodies.length;
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         const a = bodies[i];
         const b = bodies[j];
 
-        // Skip if either is being actively grabbed; still allow collisions but it can feel jittery.
-        // We'll keep it enabled, but reduce response a bit.
-        const grabbedBias = a.id === grab.activeId || b.id === grab.activeId ? 0.6 : 1.0;
+        const grabbedBias = grabbed.has(a.id) || grabbed.has(b.id) ? 0.6 : 1.0;
 
         if (a.kind === 'circle' && b.kind === 'circle') {
           const ra = a.radius ?? 0;
@@ -287,7 +759,6 @@ export function createEngine(): Engine {
             const ny = dy / d;
             const penetration = minD - d;
 
-            // position correction
             const totalMass = a.mass + b.mass;
             const moveA = penetration * (b.mass / totalMass) * grabbedBias;
             const moveB = penetration * (a.mass / totalMass) * grabbedBias;
@@ -296,7 +767,6 @@ export function createEngine(): Engine {
             b.pos.x += nx * moveB;
             b.pos.y += ny * moveB;
 
-            // velocity impulse along normal
             const rvx = b.vel.x - a.vel.x;
             const rvy = b.vel.y - a.vel.y;
             const velAlongNormal = rvx * nx + rvy * ny;
@@ -310,7 +780,6 @@ export function createEngine(): Engine {
               b.vel.x += impX / b.mass;
               b.vel.y += impY / b.mass;
 
-              // friction (tangent)
               const tx = -ny;
               const ty = nx;
               const vt = rvx * tx + rvy * ty;
@@ -346,7 +815,6 @@ export function createEngine(): Engine {
             const overlapX = Math.min(ax2 - bx1, bx2 - ax1);
             const overlapY = Math.min(ay2 - by1, by2 - ay1);
 
-            // resolve along smallest axis
             let nx = 0,
               ny = 0,
               penetration = 0;
@@ -366,7 +834,6 @@ export function createEngine(): Engine {
             b.pos.x -= nx * moveB;
             b.pos.y -= ny * moveB;
 
-            // normal impulse
             const rvx = b.vel.x - a.vel.x;
             const rvy = b.vel.y - a.vel.y;
             const velAlongNormal = rvx * nx + rvy * ny;
@@ -380,7 +847,6 @@ export function createEngine(): Engine {
               b.vel.x += impX / b.mass;
               b.vel.y += impY / b.mass;
 
-              // friction
               const tx = -ny;
               const ty = nx;
               const vt = rvx * tx + rvy * ty;
@@ -398,7 +864,6 @@ export function createEngine(): Engine {
           continue;
         }
 
-        // circle-box
         const circle = a.kind === 'circle' ? a : b.kind === 'circle' ? b : null;
         const box = a.kind === 'box' ? a : b.kind === 'box' ? b : null;
         if (circle && box) {
@@ -415,11 +880,9 @@ export function createEngine(): Engine {
 
           if (d2 < r * r) {
             const d = Math.sqrt(Math.max(d2, 1e-9));
-            // normal from box->circle
             let nx = dx / d;
             let ny = dy / d;
 
-            // If circle center is inside box (rare due to clamp), push out on nearest axis
             if (!isFinite(nx) || !isFinite(ny)) {
               const px = circle.pos.x - box.pos.x;
               const py = circle.pos.y - box.pos.y;
@@ -434,7 +897,6 @@ export function createEngine(): Engine {
 
             const penetration = r - d;
 
-            // position correction
             const totalMass = circle.mass + box.mass;
             const moveC = penetration * (box.mass / totalMass) * grabbedBias;
             const moveB = penetration * (circle.mass / totalMass) * grabbedBias;
@@ -443,7 +905,6 @@ export function createEngine(): Engine {
             box.pos.x -= nx * moveB;
             box.pos.y -= ny * moveB;
 
-            // velocity impulse
             const rvx = box.vel.x - circle.vel.x;
             const rvy = box.vel.y - circle.vel.y;
             const velAlongNormal = rvx * nx + rvy * ny;
@@ -458,7 +919,6 @@ export function createEngine(): Engine {
               box.vel.x += impX / box.mass;
               box.vel.y += impY / box.mass;
 
-              // friction
               const tx = -ny;
               const ty = nx;
               const vt = rvx * tx + rvy * ty;
@@ -478,22 +938,183 @@ export function createEngine(): Engine {
     }
   }
 
+  function resolveHandCollisions(
+    nowMs: number,
+    grabController: Map<number, number>
+  ) {
+    if (!CONFIG.physics.handCollisions) return;
+
+    // Flatten colliders for faster iteration.
+    const colliders: Array<{ handIndex: number; pos: Point2; vel: Point2; r: number }> = [];
+    for (const hs of handsState) {
+      for (const c of hs.colliders) colliders.push(c);
+    }
+    if (colliders.length === 0) return;
+
+    const eHand = CONFIG.physics.handRestitution;
+
+    for (const b of bodies) {
+      const controllerIdx = grabController.get(b.id);
+
+      for (const c of colliders) {
+        // Avoid the grabbed object jittering against the same hand that's controlling it.
+        if (controllerIdx != null && controllerIdx === c.handIndex) continue;
+        if (shouldIgnoreHandCollision(b.id, c.handIndex, nowMs)) continue;
+
+        if (b.kind === 'circle') {
+          const r = b.radius ?? 0;
+          const dx = b.pos.x - c.pos.x;
+          const dy = b.pos.y - c.pos.y;
+          const d2 = dx * dx + dy * dy;
+          const minD = r + c.r;
+          if (d2 >= minD * minD) continue;
+
+          const d = Math.sqrt(Math.max(d2, 1e-9));
+          const nx = dx / d;
+          const ny = dy / d;
+          const penetration = minD - d;
+
+          // Positional correction: move body out of hand
+          b.pos.x += nx * penetration;
+          b.pos.y += ny * penetration;
+
+          // Velocity impulse relative to moving hand collider
+          const rvx = b.vel.x - c.vel.x;
+          const rvy = b.vel.y - c.vel.y;
+          const velAlongNormal = rvx * nx + rvy * ny;
+          if (velAlongNormal < 0) {
+            const e = Math.min(eHand, b.restitution);
+            // hand is infinite mass -> impulse directly reflects relative velocity
+            const j = -(1 + e) * velAlongNormal;
+            b.vel.x += j * nx;
+            b.vel.y += j * ny;
+
+            // Simple tangential friction
+            const tx = -ny;
+            const ty = nx;
+            const vt = rvx * tx + rvy * ty;
+            const mu = b.friction;
+            b.vel.x -= vt * tx * mu * 0.15;
+            b.vel.y -= vt * ty * mu * 0.15;
+          }
+          continue;
+        }
+
+        // box vs hand-circle
+        const hw = b.size!.w / 2;
+        const hh = b.size!.h / 2;
+        const closestX = Math.max(b.pos.x - hw, Math.min(c.pos.x, b.pos.x + hw));
+        const closestY = Math.max(b.pos.y - hh, Math.min(c.pos.y, b.pos.y + hh));
+        const dx = c.pos.x - closestX;
+        const dy = c.pos.y - closestY;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= c.r * c.r) continue;
+
+        const d = Math.sqrt(Math.max(d2, 1e-9));
+        let nx = -dx / d;
+        let ny = -dy / d;
+
+        if (!isFinite(nx) || !isFinite(ny)) {
+          // Fallback normal from box center
+          const px = b.pos.x - c.pos.x;
+          const py = b.pos.y - c.pos.y;
+          if (Math.abs(px / hw) > Math.abs(py / hh)) {
+            nx = px > 0 ? 1 : -1;
+            ny = 0;
+          } else {
+            nx = 0;
+            ny = py > 0 ? 1 : -1;
+          }
+        }
+
+        const penetration = c.r - d;
+        b.pos.x += nx * penetration;
+        b.pos.y += ny * penetration;
+
+        const rvx = b.vel.x - c.vel.x;
+        const rvy = b.vel.y - c.vel.y;
+        const velAlongNormal = rvx * nx + rvy * ny;
+        if (velAlongNormal < 0) {
+          const e = Math.min(eHand, b.restitution);
+          const j = -(1 + e) * velAlongNormal;
+          b.vel.x += j * nx;
+          b.vel.y += j * ny;
+
+          const tx = -ny;
+          const ty = nx;
+          const vt = rvx * tx + rvy * ty;
+          const mu = b.friction;
+          b.vel.x -= vt * tx * mu * 0.15;
+          b.vel.y -= vt * ty * mu * 0.15;
+        }
+      }
+    }
+  }
+
   function stepPhysics(dt: number) {
     const fy = floorY();
+    const leftWorldX = screenToWorld({ x: 0, y: 0 }).x;
+    const rightWorldX = screenToWorld({ x: window.innerWidth, y: 0 }).x;
+    const nowMs = performance.now();
 
-    // basic integration
+    // Map of currently grabbed body -> controlling hand index (pinch grab only)
+    const grabController = new Map<number, number>();
+    for (let hi = 0; hi < handsState.length; hi++) {
+      const hs = handsState[hi];
+      if (hs.grabActiveId != null && hs.pointer.pinch != null) {
+        // If somehow multiple hands point at same id, keep the first.
+        if (!grabController.has(hs.grabActiveId)) grabController.set(hs.grabActiveId, hi);
+      }
+    }
+
+    // 1) Forces + integration (including grabbed body)
     for (const b of bodies) {
-      if (b.id !== grab.activeId) {
-        b.vel.y += settings.gravity * dt;
-        const drag = Math.max(0, 1 - CONFIG.physics.airDrag * dt);
-        b.vel.x *= drag;
-        b.vel.y *= drag;
+      const controllerIdx = grabController.get(b.id);
+      const isGrabbed = controllerIdx != null;
 
-        b.pos.x += b.vel.x * dt;
-        b.pos.y += b.vel.y * dt;
+      if (isGrabbed) {
+        const hs = handsState[controllerIdx];
+        const target = screenToWorld(hs.pointer.pinch!);
+        const errX = target.x - b.pos.x;
+        const errY = target.y - b.pos.y;
+
+        // Desired velocity = hand velocity + correction toward target.
+        const desired = clampVecMag(
+          {
+            x: hs.pointer.pinchVel.x + errX * CONFIG.physics.grabPosGain,
+            y: hs.pointer.pinchVel.y + errY * CONFIG.physics.grabPosGain,
+          },
+          CONFIG.physics.maxGrabSpeed
+        );
+
+        const k = clamp(CONFIG.physics.grabFollow, 0, 1);
+        b.vel.x = lerp(b.vel.x, desired.x, k);
+        b.vel.y = lerp(b.vel.y, desired.y, k);
+      } else {
+        b.vel.y += settings.gravity * dt;
       }
 
-      // Floor collision
+      // Don't air-drag grabbed bodies; it makes them feel "behind".
+      if (!isGrabbed) {
+        const drag = Math.max(0, 1 - settings.airDrag * dt);
+        b.vel.x *= drag;
+        b.vel.y *= drag;
+      }
+
+      b.pos.x += b.vel.x * dt;
+      b.pos.y += b.vel.y * dt;
+    }
+
+    // 1.5) Resolve collisions against kinematic hand colliders
+    // Do a couple passes for stability; dt is used only for semantics, not integration here.
+    resolveHandCollisions(nowMs, grabController);
+    resolveHandCollisions(nowMs, grabController);
+
+    // 1.75) Playground hoop collisions
+    resolveHoopCollisions();
+
+    // 2) Floor + walls constraints for all bodies (including grabbed)
+    for (const b of bodies) {
       if (b.kind === 'circle') {
         const r = b.radius ?? 0;
         if (b.pos.y + r > fy) {
@@ -501,21 +1122,7 @@ export function createEngine(): Engine {
           if (b.vel.y > 0) b.vel.y = -b.vel.y * b.restitution;
           b.vel.x *= 1 - b.friction * 0.08;
         }
-      } else {
-        const halfH = b.size!.h / 2;
-        if (b.pos.y + halfH > fy) {
-          b.pos.y = fy - halfH;
-          if (b.vel.y > 0) b.vel.y = -b.vel.y * b.restitution;
-          b.vel.x *= 1 - b.friction * 0.08;
-        }
-      }
 
-      // Screen bounds mapped to WORLD bounds
-      const leftWorldX = screenToWorld({ x: 0, y: 0 }).x;
-      const rightWorldX = screenToWorld({ x: window.innerWidth, y: 0 }).x;
-
-      if (b.kind === 'circle') {
-        const r = b.radius ?? 0;
         if (b.pos.x - r < leftWorldX) {
           b.pos.x = leftWorldX + r;
           if (b.vel.x < 0) b.vel.x = -b.vel.x * 0.6;
@@ -525,6 +1132,13 @@ export function createEngine(): Engine {
           if (b.vel.x > 0) b.vel.x = -b.vel.x * 0.6;
         }
       } else {
+        const halfH = b.size!.h / 2;
+        if (b.pos.y + halfH > fy) {
+          b.pos.y = fy - halfH;
+          if (b.vel.y > 0) b.vel.y = -b.vel.y * b.restitution;
+          b.vel.x *= 1 - b.friction * 0.08;
+        }
+
         const halfW = b.size!.w / 2;
         if (b.pos.x - halfW < leftWorldX) {
           b.pos.x = leftWorldX + halfW;
@@ -537,50 +1151,15 @@ export function createEngine(): Engine {
       }
     }
 
-    // Grab spring (pinch dragging)
-    const grabbed = getBodyById(grab.activeId);
-    if (grabbed && pointer.pinch) {
-      const pinchW = screenToWorld(pointer.pinch);
-      const dx = pinchW.x - grabbed.pos.x;
-      const dy = pinchW.y - grabbed.pos.y;
-
-      const ax =
-        (dx * CONFIG.physics.grabStiffness - grabbed.vel.x * CONFIG.physics.grabDamping) / grabbed.mass;
-      const ay =
-        (dy * CONFIG.physics.grabStiffness - grabbed.vel.y * CONFIG.physics.grabDamping) / grabbed.mass;
-
-      grabbed.vel.x += ax * dt;
-      grabbed.vel.y += ay * dt;
-
-      grabbed.pos.x += grabbed.vel.x * dt;
-      grabbed.pos.y += grabbed.vel.y * dt;
-    }
-
-    // After integration, resolve body-body collisions
-    // A couple passes helps reduce overlap explosions in a simple solver.
+    // 3) Resolve body-body collisions (a couple passes helps stability)
     resolveBodyCollisions();
     resolveBodyCollisions();
   }
-
-  function resizeCanvasToDisplaySize() {
-    if (!overlay) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.floor(window.innerWidth * dpr);
-    const h = Math.floor(window.innerHeight * dpr);
-    if (overlay.width !== w) overlay.width = w;
-    if (overlay.height !== h) overlay.height = h;
-    overlay.style.width = `${window.innerWidth}px`;
-    overlay.style.height = `${window.innerHeight}px`;
-  }
-
-  let lastLandmarksPx: Point2[] | null = null;
-  let pinchingNow = false;
-  let pinchPosPx: Point2 | null = null;
 
   function drawGlowCircle(p: Point2, r: number, color: string) {
     if (!ctx) return;
     ctx.save();
-    ctx.globalAlpha = CONFIG.glowAlpha;
+    ctx.globalAlpha = settings.glowAlpha;
     const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.2);
     g.addColorStop(0, color);
     g.addColorStop(1, 'rgba(0,0,0,0)');
@@ -591,32 +1170,14 @@ export function createEngine(): Engine {
     ctx.restore();
   }
 
-  function smoothPoints(prev: Point2[] | null, next: Point2[], smoothing: number): Point2[] {
-    if (!prev || prev.length !== next.length) return next;
-    const s = Math.min(0.98, Math.max(0, smoothing));
-    const a = 1 - s;
-    return next.map((p, i) => ({
-      x: prev[i].x + (p.x - prev[i].x) * a,
-      y: prev[i].y + (p.y - prev[i].y) * a,
-    }));
-  }
-
-  function toScreenPoint(lm: any): Point2 {
-    // keep hand in SCREEN coordinates (for stable MediaPipe mapping)
-    return {
-      x: (1 - lm.x) * window.innerWidth,
-      y: lm.y * window.innerHeight,
-    };
-  }
-
   function drawHand(pts: Point2[], pinching: boolean) {
     if (!ctx) return;
-    // Bones
+
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = `rgba(102, 255, 255, ${CONFIG.boneAlpha})`;
-    ctx.lineWidth = CONFIG.boneWidth;
+    ctx.strokeStyle = `rgba(102, 255, 255, ${settings.boneAlpha})`;
+    ctx.lineWidth = settings.boneWidth;
 
     for (const [a, b] of Array.from(HAND_CONNECTIONS) as Array<[number, number]>) {
       const pa = pts[a];
@@ -628,10 +1189,9 @@ export function createEngine(): Engine {
     }
     ctx.restore();
 
-    // Palm fill (wrist + MCPs)
     const palmIds = [0, 5, 9, 13, 17];
     ctx.save();
-    ctx.fillStyle = `rgba(0, 255, 255, ${CONFIG.palmAlpha})`;
+    ctx.fillStyle = `rgba(0, 255, 255, ${settings.palmAlpha})`;
     ctx.beginPath();
     ctx.moveTo(pts[palmIds[0]].x, pts[palmIds[0]].y);
     for (let i = 1; i < palmIds.length; i++) ctx.lineTo(pts[palmIds[i]].x, pts[palmIds[i]].y);
@@ -639,14 +1199,13 @@ export function createEngine(): Engine {
     ctx.fill();
     ctx.restore();
 
-    // Joints
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
       const isTip = i === 4 || i === 8;
       const pinchColor = 'rgba(255, 51, 85, 1)';
       const baseColor = 'rgba(0, 255, 255, 1)';
 
-      const r = isTip && pinching ? CONFIG.jointRadius * 1.35 : CONFIG.jointRadius;
+      const r = isTip && pinching ? settings.jointRadius * 1.35 : settings.jointRadius;
       const c = isTip && pinching ? pinchColor : baseColor;
 
       drawGlowCircle(p, r, c);
@@ -662,7 +1221,6 @@ export function createEngine(): Engine {
 
   function drawBody(b: PhysicsBody) {
     if (!ctx) return;
-    // Draw in WORLD space (camera transform already applied)
     ctx.save();
     ctx.globalAlpha = 0.95;
     ctx.fillStyle = b.color;
@@ -684,7 +1242,6 @@ export function createEngine(): Engine {
       ctx.stroke();
     }
 
-    // subtle glow
     ctx.globalAlpha = 0.22;
     ctx.strokeStyle = b.color;
     ctx.lineWidth = 10 / camera2d.zoom;
@@ -706,7 +1263,6 @@ export function createEngine(): Engine {
     if (!ctx) return;
     const fy = floorY();
 
-    // floor plane
     ctx.save();
     ctx.fillStyle = 'rgba(255,255,255,0.06)';
 
@@ -716,7 +1272,6 @@ export function createEngine(): Engine {
 
     ctx.fillRect(leftWorldX, fy, rightWorldX - leftWorldX, bottomWorldY - fy);
 
-    // floor line
     ctx.strokeStyle = 'rgba(0,255,255,0.35)';
     ctx.lineWidth = 2 / camera2d.zoom;
     ctx.beginPath();
@@ -724,11 +1279,10 @@ export function createEngine(): Engine {
     ctx.lineTo(rightWorldX, fy);
     ctx.stroke();
 
-    // grid hint
     ctx.globalAlpha = 0.15;
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
     ctx.lineWidth = 1 / camera2d.zoom;
-    const step = 60; // in screen px
+    const step = 60;
     const stepWorld = step / camera2d.zoom;
     const start = Math.floor(leftWorldX / stepWorld) * stepWorld;
     for (let x = start; x < rightWorldX; x += stepWorld) {
@@ -741,66 +1295,147 @@ export function createEngine(): Engine {
     ctx.restore();
   }
 
-  function draw() {
-    if (!ctx) return;
-    resizeCanvasToDisplaySize();
+  function tryStartGrab() {
+    // Legacy single-hand signature kept unused.
+  }
 
-    // Clear in SCREEN space
-    resetCanvasTransform(ctx);
-    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  function tryStartGrabForHand(handIndex: number) {
+    const hs = handsState[handIndex];
+    if (!hs.pointer.pinch || hs.grabActiveId != null) return;
 
-    // Draw scene in WORLD space
-    applyCameraTransform(ctx);
-    drawFloor();
-    for (const b of bodies) drawBody(b);
+    // Fresh throw history per grab attempt
+    hs.throwSamples = [];
 
-    // Draw hand in SCREEN space (not affected by zoom)
-    resetCanvasTransform(ctx);
-    if (lastLandmarksPx) {
-      drawHand(lastLandmarksPx, pinchingNow);
+    const pinchW = screenToWorld(hs.pointer.pinch);
 
-      if (pinchPosPx) {
-        ctx.save();
-        ctx.strokeStyle = pinchingNow ? 'rgba(255, 51, 85, 0.95)' : 'rgba(0, 255, 255, 0.9)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(pinchPosPx.x, pinchPosPx.y, 14, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.restore();
+    let best: { b: PhysicsBody; d: number } | null = null;
+    for (const b of bodies) {
+      if (isBodyGrabbedByOtherHand(b.id, handIndex)) continue;
+      const d = bodyPickDistance(b, pinchW);
+      if (d < settings.grabRadius / camera2d.zoom && (!best || d < best.d)) {
+        best = { b, d };
       }
     }
+
+    if (best) hs.grabActiveId = best.b.id;
   }
 
-  let lastFrameT = 0;
+  function endGrab() {
+    // Legacy single-hand signature kept unused.
+  }
 
-  function loop(t: number) {
+  function endGrabForHand(handIndex: number) {
+    const hs = handsState[handIndex];
+    const b = getBodyById(hs.grabActiveId);
+    hs.grabActiveId = null;
+
+    if (b) {
+      const baseVel =
+        hs.throwSamples.length >= CONFIG.physics.throwMinSamples
+          ? robustAverageVelocity(hs.throwSamples, CONFIG.physics.maxThrowSpeed)
+          : hs.pointer.pinchVel;
+
+      const throwVel = clampVecMag(
+        { x: baseVel.x * settings.throwScale, y: baseVel.y * settings.throwScale },
+        CONFIG.physics.maxThrowSpeed
+      );
+
+      const k = clamp(CONFIG.physics.throwBlend, 0, 1);
+      b.vel.x = lerp(b.vel.x, throwVel.x, k);
+      b.vel.y = lerp(b.vel.y, throwVel.y, k);
+      const clamped = clampVecMag(b.vel, CONFIG.physics.maxThrowSpeed);
+      b.vel.x = clamped.x;
+      b.vel.y = clamped.y;
+
+      // Prevent immediate post-release self-collision while the hand is still overlapping.
+      setHandCollisionIgnore(b.id, handIndex, performance.now() + CONFIG.physics.throwHandIgnoreMs);
+    }
+
+    hs.throwSamples = [];
+  }
+
+  const settings: {
+    zoom: number;
+    gravity: number;
+    airDrag: number;
+    floorHeight: number;
+    grabRadius: number;
+    grabStiffness: number;
+    grabDamping: number;
+    throwScale: number;
+    restitution: number;
+    friction: number;
+    jointRadius: number;
+    boneWidth: number;
+    boneAlpha: number;
+    palmAlpha: number;
+    glowAlpha: number;
+  } = {
+    zoom: 1,
+    gravity: CONFIG.physics.gravity,
+    airDrag: CONFIG.physics.airDrag,
+    floorHeight: CONFIG.physics.floorHeight,
+    grabRadius: CONFIG.physics.grabRadius,
+    grabStiffness: CONFIG.physics.grabStiffness,
+    grabDamping: CONFIG.physics.grabDamping,
+    throwScale: CONFIG.physics.throwScale,
+    restitution: 0.45,
+    friction: 0.55,
+
+    jointRadius: CONFIG.jointRadius,
+    boneWidth: CONFIG.boneWidth,
+    boneAlpha: CONFIG.boneAlpha,
+    palmAlpha: CONFIG.palmAlpha,
+    glowAlpha: CONFIG.glowAlpha,
+  };
+
+  function tick(t = performance.now()) {
     if (!running) return;
-    const dtRaw = lastFrameT ? (t - lastFrameT) / 1000 : 0;
-    lastFrameT = t;
 
-    const dt = clamp(dtRaw, 0, CONFIG.physics.maxDt);
+    if (!lastT) lastT = t;
+    let dt = (t - lastT) / 1000;
+    lastT = t;
+    dt = Math.min(CONFIG.physics.maxDt, Math.max(0, dt));
+
     const sub = CONFIG.physics.substeps;
-    const stepDt = dt / sub;
+    const sdt = dt / sub;
+    for (let i = 0; i < sub; i++) stepPhysics(sdt);
 
-    for (let i = 0; i < sub; i++) stepPhysics(stepDt);
-    draw();
+    resetCanvasTransform();
+    ctx!.clearRect(0, 0, window.innerWidth, window.innerHeight);
 
-    rafId = requestAnimationFrame(loop);
+    applyCameraTransform();
+    drawFloor();
+    drawHoop();
+    for (const b of bodies) drawBody(b);
+
+    resetCanvasTransform();
+    // Score overlay
+    if (CONFIG.physics.hoopEnabled) {
+      ctx!.save();
+      ctx!.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx!.font = '600 16px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      ctx!.textAlign = 'center';
+      ctx!.textBaseline = 'top';
+      ctx!.fillText(`Score: ${playground.score}`, window.innerWidth / 2, 18);
+      ctx!.restore();
+    }
+
+    for (const hs of handsState) {
+      if (!hs.lastLandmarksPx) continue;
+      drawHand(hs.lastLandmarksPx, hs.isPinching);
+    }
+
+    rafId = requestAnimationFrame(tick);
   }
 
-  function ensureHands() {
-    if (hands) return;
+  function initMediaPipe() {
+    if (!video) return;
 
-    // If the WASM runtime aborts once, it tends to stay poisoned for the rest of the session.
-    // Don’t try to re-initialize or keep sending frames after that.
-    if (handsFatalError) return;
+    const MP_HANDS_VERSION = '0.4.1675469240';
 
     hands = new Hands({
-      // Use one coherent local asset source (Vite /public) so the packed-assets loader
-      // can fetch its companion .data file correctly.
-      locateFile: (file) => {
-        return `/mediapipe/hands/${file}`;
-      },
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${MP_HANDS_VERSION}/${file}`,
     });
 
     hands.setOptions({
@@ -808,93 +1443,233 @@ export function createEngine(): Engine {
       modelComplexity: 1,
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.5,
-      // IMPORTANT: we already mirror X in our own coordinate mapping (1 - x)
-      // and the video element is mirrored via CSS (scaleX(-1)).
-      // Enabling selfieMode here would double-mirror the landmarks.
       selfieMode: false,
+      // @ts-expect-error non-standard
+      delegate: 'CPU',
     });
 
     hands.onResults((results: Results) => {
-      if (CONFIG.perfLog) {
-        const now = performance.now();
-        const dt = lastResultsT ? now - lastResultsT : 0;
-        lastResultsT = now;
-
-        // Log at most ~once/sec
-        if (now - lastPerfLogT > 1000) {
-          lastPerfLogT = now;
-          const hz = dt > 0 ? (1000 / dt).toFixed(1) : 'n/a';
-          console.debug(`[Tekton][perf] onResults ~${hz}Hz, last send ${lastSendDurationMs.toFixed(1)}ms`);
-        }
-      }
-
-      if (!hasFirstResults) {
-        hasFirstResults = true;
+      if (!firstResultsEmitted) {
+        firstResultsEmitted = true;
         onFirstResultsCb?.();
       }
 
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const lms = results.multiHandLandmarks[0];
-        const pts = lms.map(toScreenPoint);
-        lastLandmarksPx = smoothPoints(lastLandmarksPx, pts, CONFIG.smoothing);
+      const lmsAll = results.multiHandLandmarks ?? [];
 
-        const thumb = lastLandmarksPx[4];
-        const index = lastLandmarksPx[8];
-        pinchPosPx = { x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2 };
+      for (let i = 0; i < handsState.length; i++) {
+        const hs = handsState[i];
+        const lms = lmsAll[i];
 
-        // pinch detection in landmark space (normalized)
-        const dNorm = Math.hypot(lms[4].x - lms[8].x, lms[4].y - lms[8].y);
-        const prevPinching = pinchingNow;
-        const pinchNow = prevPinching ? dNorm < CONFIG.pinchEnd : dNorm < CONFIG.pinchStart;
+        if (lms) {
+          const pts = lms.map(toScreenPoint);
+          // Use RAW points for interaction to avoid added latency from smoothing.
+          const thumbRaw = pts[4];
+          const indexRaw = pts[8];
+          hs.pinchPosPx = { x: (thumbRaw.x + indexRaw.x) / 2, y: (thumbRaw.y + indexRaw.y) / 2 };
 
-        // track pinch velocity in pixels using real dt between frames
-        const now = performance.now();
-        const dt = pointer.lastPinchT > 0 ? (now - pointer.lastPinchT) / 1000 : 0;
-        pointer.lastPinchT = now;
+          // Palm center in SCREEN px
+          const palmIdsPx = [0, 5, 9, 13, 17];
+          let palmXpx = 0;
+          let palmYpx = 0;
+          for (const pid of palmIdsPx) {
+            palmXpx += pts[pid].x;
+            palmYpx += pts[pid].y;
+          }
+          palmXpx /= palmIdsPx.length;
+          palmYpx /= palmIdsPx.length;
+          hs.palmPosPx = { x: palmXpx, y: palmYpx };
 
-        // Always keep pointer positions updated (even if not pinching) so release has a sane velocity.
-        pointer.prevPinch = pointer.pinch;
-        pointer.pinch = pinchPosPx;
+          const dPx = Math.hypot(thumbRaw.x - indexRaw.x, thumbRaw.y - indexRaw.y);
+          const prevPinching = hs.isPinching;
+          // Prefer normalized landmark distance (camera-size independent).
+          // Also compute a screen-normalized distance as a fallback.
+          const dNorm = Math.hypot(lms[4].x - lms[8].x, lms[4].y - lms[8].y);
+          const minDim = Math.max(1, Math.min(window.innerWidth, window.innerHeight));
+          const dScreenNorm = dPx / minDim;
+          const d = Math.min(dNorm, dScreenNorm);
+          const pinchNow = prevPinching ? d < CONFIG.pinchEnd : d < CONFIG.pinchStart;
 
-        if (pointer.prevPinch && pointer.pinch && dt > 0.0001) {
-          pointer.pinchVel.x = (pointer.pinch.x - pointer.prevPinch.x) / dt;
-          pointer.pinchVel.y = (pointer.pinch.y - pointer.prevPinch.y) / dt;
+          // Grasp/fist gesture is disabled: pinch is thumb+index only.
+          const graspNow = false;
+
+          // Pinch grabbing only (no grasp/palm grabbing).
+          const activeGrabNow = pinchNow;
+          const grabPosPx = pinchNow ? hs.pinchPosPx : null;
+          hs.grabPosPx = grabPosPx;
+
+          // Smooth rendering less while pinching so visuals match interaction.
+          const renderSmoothing = activeGrabNow ? 0.15 : CONFIG.smoothing;
+          hs.lastLandmarksPx = smoothPoints(hs.lastLandmarksPx, pts, renderSmoothing);
+          const landmarksPx = hs.lastLandmarksPx;
+
+          const now = performance.now();
+          const dt = hs.pointer.lastPinchT > 0 ? (now - hs.pointer.lastPinchT) / 1000 : 0;
+          hs.pointer.lastPinchT = now;
+
+          hs.pointer.prevPinch = hs.pointer.pinch;
+          hs.pointer.pinch = grabPosPx;
+
+          // Compute pinch velocity in WORLD units to keep throw consistent across zoom,
+          // and clamp/smooth to avoid spikes from irregular MediaPipe callback timing.
+          const minDt = 1 / 120;
+          const maxDt = 1 / 15;
+
+          if (hs.pointer.prevPinch && hs.pointer.pinch && dt >= minDt && dt <= maxDt) {
+            const a = screenToWorld(hs.pointer.prevPinch);
+            const c = screenToWorld(hs.pointer.pinch);
+            const inst = {
+              x: (c.x - a.x) / dt,
+              y: (c.y - a.y) / dt,
+            };
+
+            const instClamped = clampVecMag(inst, CONFIG.physics.maxThrowSpeed);
+            const alpha = clamp(CONFIG.physics.throwSmoothing, 0, 1);
+            hs.pointer.pinchVel.x = lerp(hs.pointer.pinchVel.x, instClamped.x, alpha);
+            hs.pointer.pinchVel.y = lerp(hs.pointer.pinchVel.y, instClamped.y, alpha);
+
+            // Collect samples for release throw while pinching.
+            if (grabPosPx) {
+              const nowMs = performance.now();
+              hs.throwSamples.push({ v: instClamped, t: nowMs });
+              const windowMs = CONFIG.physics.throwWindowMs;
+              const cutoff = nowMs - windowMs;
+              // Keep only recent samples; preserve order.
+              hs.throwSamples = hs.throwSamples.filter((s) => s.t >= cutoff);
+            }
+          } else {
+            hs.pointer.pinchVel.x = lerp(hs.pointer.pinchVel.x, 0, 0.25);
+            hs.pointer.pinchVel.y = lerp(hs.pointer.pinchVel.y, 0, 0.25);
+          }
+
+          // Build/update kinematic colliders (WORLD space).
+          // Keep it simple: one big palm circle + a few knuckle points.
+          const palmW = screenToWorld(hs.palmPosPx!);
+
+          const pointIds = [5, 9, 13, 17, 0];
+          const pointsW = pointIds.map((pid) => screenToWorld(pts[pid]));
+
+          const palmR = CONFIG.physics.handPalmRadius / camera2d.zoom;
+          const pointR = CONFIG.physics.handPointRadius / camera2d.zoom;
+
+          const nextPos: Point2[] = [palmW, ...pointsW];
+          const vel: Point2[] = [];
+
+          if (dt >= minDt && dt <= maxDt && hs.prevColliderPos.length === nextPos.length) {
+            for (let k = 0; k < nextPos.length; k++) {
+              vel.push({
+                x: (nextPos[k].x - hs.prevColliderPos[k].x) / dt,
+                y: (nextPos[k].y - hs.prevColliderPos[k].y) / dt,
+              });
+            }
+          } else {
+            for (let k = 0; k < nextPos.length; k++) vel.push({ x: 0, y: 0 });
+          }
+
+          hs.prevColliderPos = nextPos;
+          hs.colliders = [
+            { handIndex: i, pos: nextPos[0], vel: clampVecMag(vel[0], CONFIG.physics.maxThrowSpeed), r: palmR },
+            { handIndex: i, pos: nextPos[1], vel: clampVecMag(vel[1], CONFIG.physics.maxThrowSpeed), r: pointR },
+            { handIndex: i, pos: nextPos[2], vel: clampVecMag(vel[2], CONFIG.physics.maxThrowSpeed), r: pointR },
+            { handIndex: i, pos: nextPos[3], vel: clampVecMag(vel[3], CONFIG.physics.maxThrowSpeed), r: pointR },
+            { handIndex: i, pos: nextPos[4], vel: clampVecMag(vel[4], CONFIG.physics.maxThrowSpeed), r: pointR },
+            { handIndex: i, pos: nextPos[5], vel: clampVecMag(vel[5], CONFIG.physics.maxThrowSpeed), r: pointR },
+          ];
+
+          hs.isPinching = pinchNow;
+          hs.isGrasping = false;
+
+          const wasActiveGrab = prevPinching;
+          if (activeGrabNow && !wasActiveGrab) {
+            tryStartGrabForHand(i);
+          } else if (!activeGrabNow && wasActiveGrab) {
+            endGrabForHand(i);
+          }
         } else {
-          pointer.pinchVel.x = 0;
-          pointer.pinchVel.y = 0;
+          // This specific hand is not present in the current frame.
+          hs.lastLandmarksPx = null;
+          hs.pinchPosPx = null;
+          hs.isPinching = false;
+          hs.isGrasping = false;
+          hs.palmPosPx = null;
+          hs.grabPosPx = null;
+
+          hs.pointer.pinch = null;
+          hs.pointer.prevPinch = null;
+          hs.pointer.pinchVel.x = 0;
+          hs.pointer.pinchVel.y = 0;
+          hs.pointer.lastPinchT = 0;
+
+          hs.throwSamples = [];
+
+          hs.colliders = [];
+          hs.prevColliderPos = [];
+
+          endGrabForHand(i);
         }
-
-        // state transitions (use prevPinching, then assign)
-        if (pinchNow && !prevPinching) {
-          pinchingNow = true;
-          tryStartGrab();
-        } else if (!pinchNow && prevPinching) {
-          pinchingNow = false;
-          endGrab();
-        } else {
-          pinchingNow = pinchNow;
-        }
-      } else {
-        lastLandmarksPx = null;
-        pinchPosPx = null;
-        pinchingNow = false;
-
-        pointer.pinch = null;
-        pointer.prevPinch = null;
-        pointer.pinchVel.x = 0;
-        pointer.pinchVel.y = 0;
-        pointer.lastPinchT = 0;
-
-        endGrab();
       }
     });
+
+    camera = new Camera(video, {
+      onFrame: async () => {
+        if (!hands || !video) return;
+        await hands.send({ image: video });
+      },
+      width: 640,
+      height: 480,
+    });
+
+    camera.start();
   }
 
-  function handleResize() {
-    if (!ctx) return;
-    resizeCanvasToDisplaySize();
+  function initVoiceControl() {
+    const SpeechRecognitionImpl =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionImpl) return;
 
-    // keep objects above the new floor if the window shrinks
+    const rec: SpeechRecognition = new SpeechRecognitionImpl();
+    recognition = rec;
+
+    rec.continuous = true;
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+
+    rec.onresult = (event: any) => {
+      const last = event.results.length - 1;
+      const command = String(event.results[last][0].transcript ?? '')
+        .trim()
+        .toLowerCase();
+
+      if (command.includes('reset') || command.includes('clear')) {
+        resetScene();
+      } else if (command.includes('spawn') || command.includes('add')) {
+        addRandomBody();
+      }
+    };
+
+    try {
+      rec.start();
+    } catch {
+      // ignore if already started
+    }
+  }
+
+  function onWheel(e: WheelEvent) {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.('#panel')) return;
+
+    e.preventDefault();
+    const delta = Math.sign(e.deltaY);
+    camera2d.zoom = clamp(
+      camera2d.zoom * (delta > 0 ? 0.95 : 1.05),
+      0.5,
+      1.6
+    );
+    settings.zoom = camera2d.zoom;
+  }
+
+  function onResize() {
+    resizeOverlay();
+
     const fy = floorY();
     for (const b of bodies) {
       if (b.kind === 'circle') {
@@ -913,106 +1688,49 @@ export function createEngine(): Engine {
     if (!ctx) throw new Error('Could not get 2D context');
 
     onFirstResultsCb = args.onFirstResults;
+    firstResultsEmitted = false;
 
-    camera2d.zoom = settings.zoom;
+    resizeOverlay();
 
-    ensureHands();
+    // start empty
+    resetScene();
 
-    if (!video) throw new Error('No video element');
+    window.addEventListener('resize', onResize);
+    window.addEventListener('wheel', onWheel, { passive: false });
 
-  // Useful runtime diagnostics (especially for permission + asset-load failures)
-  // without changing the core behavior.
-  console.debug('[Tekton] Mounting engine (MediaPipe Hands)…');
+    initVoiceControl();
+    initMediaPipe();
 
-    // Camera will request webcam access.
-    // Guard against overlapping sends (wheel zoom can trigger extra frames + layout work).
-    let sendInFlight = false;
-    camera = new Camera(video, {
-      onFrame: async () => {
-        if (!hands || !video) return;
-        if (handsFatalError) return;
-        if (sendInFlight) return;
-        if (performance.now() < pauseHandsUntil) return;
-        if (video.videoWidth === 0 || video.videoHeight === 0) return;
-
-        sendInFlight = true;
-        try {
-          const t0 = performance.now();
-          await hands.send({ image: video });
-          lastSendDurationMs = performance.now() - t0;
-        } catch (err) {
-          // When MediaPipe aborts (Emscripten), it’s not recoverable in-page.
-          const msg = String(err);
-          if (msg.toLowerCase().includes('aborted(') || msg.toLowerCase().includes('abort')) {
-            handsFatalError = true;
-            // Stop camera loop to avoid spamming after fatal abort.
-            camera?.stop?.();
-            if (video?.srcObject instanceof MediaStream) {
-              for (const track of video.srcObject.getTracks()) track.stop();
-            }
-          }
-          console.error('[Tekton] hands.send failed.', err);
-        } finally {
-          sendInFlight = false;
-        }
-      },
-      // 720p can be noticeably heavier on CPU inference.
-      // 640x480 is a good latency/quality tradeoff for hand tracking.
-      width: 640,
-      height: 480,
-    });
-
-    window.addEventListener('resize', handleResize);
-
-    hasFirstResults = false;
-    mounted = true;
-
-    camera
-      .start()
-      .catch?.((err: unknown) => {
-        // Some versions expose a promise; others don't. This is best-effort.
-        console.error('[Tekton] Camera failed to start. Check webcam permissions.', err);
-      });
-
-    if (!running) {
-      running = true;
-      lastFrameT = 0;
-      rafId = requestAnimationFrame(loop);
-    }
+    running = true;
+    lastT = performance.now();
+    rafId = requestAnimationFrame(tick);
   }
 
   function unmount() {
-    mounted = false;
-    onFirstResultsCb = undefined;
+    running = false;
 
-    window.removeEventListener('resize', handleResize);
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('wheel', onWheel as any);
 
     if (rafId != null) {
       cancelAnimationFrame(rafId);
       rafId = null;
     }
-    running = false;
 
-    // Best-effort stop camera; mediapipe Camera doesn't expose stop in typings consistently.
-    // We'll pause the video stream tracks too.
+    try {
+      recognition?.stop();
+    } catch {
+      // ignore
+    }
+    recognition = null;
+
     if (video?.srcObject instanceof MediaStream) {
       for (const track of video.srcObject.getTracks()) track.stop();
     }
 
-    // Release references
     camera = null;
     hands?.close?.();
     hands = null;
-
-  lastLandmarksPx = null;
-  pinchPosPx = null;
-  pinchingNow = false;
-  pointer.pinch = null;
-  pointer.prevPinch = null;
-  pointer.pinchVel.x = 0;
-  pointer.pinchVel.y = 0;
-  pointer.lastPinchT = 0;
-  grab.activeId = null;
 
     overlay = null;
     ctx = null;
@@ -1021,27 +1739,17 @@ export function createEngine(): Engine {
 
   function applySettings(next: EngineSettings) {
     settings.zoom = next.zoom;
-  settings.gravity = next.gravity;
-  settings.floorHeight = next.floorHeight;
-    settings.bounciness = next.bounciness;
+    camera2d.zoom = next.zoom;
+
+    settings.gravity = next.gravity;
+    settings.floorHeight = next.floorHeight;
+
+    settings.restitution = next.bounciness;
     settings.friction = next.friction;
 
-    camera2d.zoom = settings.zoom;
-
-  // Small debounce window after zoom changes.
-  // This keeps MediaPipe from hitting edge cases when the browser is mid-layout.
-  pauseHandsUntil = performance.now() + 120;
-
-    // Apply to existing bodies so controls affect them immediately
     for (const b of bodies) {
-      b.restitution = settings.bounciness;
+      b.restitution = settings.restitution;
       b.friction = settings.friction;
-    }
-
-    // If mounted, redraw ASAP
-    if (mounted && !running) {
-      running = true;
-      rafId = requestAnimationFrame(loop);
     }
   }
 
@@ -1049,6 +1757,7 @@ export function createEngine(): Engine {
     mount,
     unmount,
     applySettings,
+    addBody,
     addRandomBody,
     resetScene,
   };

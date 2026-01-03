@@ -15,41 +15,17 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(true);
 
   const [settings, setSettings] = useState<SettingsModel>(() => ({
-    zoom: 1,
+    zoom: 0.9,
+    spawnShape: 'mixed',
     gravity: 2200,
     floorHeight: 140,
     bounciness: 0.45,
     friction: 0.55,
   }));
 
-  useEffect(() => {
-    function clamp(v: number, min: number, max: number) {
-      return Math.max(min, Math.min(max, v));
-    }
-
-    function onWheel(e: WheelEvent) {
-      // Don't hijack scroll when the user is interacting with the panel.
-      const target = e.target as HTMLElement | null;
-      if (target?.closest?.('#panel')) return;
-
-      // Prevent page scroll (we're using wheel for zoom)
-      e.preventDefault();
-
-      const direction = Math.sign(e.deltaY);
-      // deltaY > 0 means scrolling down (zoom out)
-      const step = 0.05;
-      const nextZoom = clamp(settings.zoom - direction * step, 0.5, 1.6);
-
-      if (nextZoom === settings.zoom) return;
-
-      const next: SettingsModel = { ...settings, zoom: nextZoom };
-      setSettings(next);
-      engine.applySettings(next);
-    }
-
-    window.addEventListener('wheel', onWheel, { passive: false });
-    return () => window.removeEventListener('wheel', onWheel as any);
-  }, [engine, settings]);
+  // IMPORTANT: keep callback identity stable so <Scene /> doesn't unmount/remount
+  // the MediaPipe graph on any re-render.
+  const handleFirstResults = useMemo(() => () => setLoaderVisible(false), []);
 
   return (
     <>
@@ -60,7 +36,7 @@ export default function App() {
         open={panelOpen}
         settings={settings}
         onToggleOpen={() => setPanelOpen((v) => !v)}
-        onSpawn={() => engine.addRandomBody()}
+        onSpawn={() => engine.addBody(settings.spawnShape)}
         onReset={() => engine.resetScene()}
         onChange={(next) => {
           setSettings(next);
@@ -72,7 +48,7 @@ export default function App() {
         overlayCanvasRef={overlayCanvasRef}
         videoRef={videoRef}
         engine={engine}
-        onFirstResults={() => setLoaderVisible(false)}
+        onFirstResults={handleFirstResults}
         initialSettings={settings}
       />
     </>
