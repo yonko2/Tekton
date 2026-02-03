@@ -11,11 +11,6 @@ const gestureLabels: Record<GestureType, string> = {
   none: 'None',
   point: 'Pointing',
   pinch: 'Pinch',
-  open_palm: 'Open Palm',
-  fist: 'Fist',
-  two_finger_pinch: 'Two-Finger Pinch',
-  swipe_left: 'Swipe Left',
-  swipe_right: 'Swipe Right',
 };
 
 export function StatusPanel({ gesture, objectCount, selectedObject, isTracking }: StatusPanelProps) {

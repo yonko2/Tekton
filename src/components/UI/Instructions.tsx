@@ -4,10 +4,10 @@ export function Instructions() {
       <h3>Controls</h3>
       <ul>
         <li><strong>Point</strong> - Move pointer, hover objects</li>
-        <li><strong>Pinch</strong> - Grab and move objects</li>
-        <li><strong>Open Palm</strong> - Pan camera view</li>
-        <li><strong>Fist</strong> - Reset camera</li>
-        <li><strong>Two-Finger Pinch</strong> - Scale selected object</li>
+        <li><strong>Pinch (near object)</strong> - Grab and move</li>
+        <li><strong>Pinch + move closer/farther</strong> - Scale object</li>
+        <li><strong>Pinch (empty space)</strong> - Rotate camera</li>
+        <li><strong>Pinch + move closer/farther</strong> - Zoom camera</li>
       </ul>
       
       <h3 style={{ marginTop: '16px' }}>Voice Commands</h3>

@@ -13,6 +13,7 @@ import type { HandLandmarks, Vector3Tuple } from '@/types';
 function SandboxApp() {
   const { state, setHandTracking, updateObjectPosition, updateObjectScale, setLoading, setPermissions } = useSandbox();
   const [isReady, setIsReady] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
   const cameraRef = useRef<THREE.Camera | null>(null);
 
   // Hand tracking setup
@@ -37,8 +38,13 @@ function SandboxApp() {
 
   // Gesture recognition with callbacks
   const handleGrab = useCallback((objectId: string, _position: Vector3Tuple) => {
+    // Store initial scale for scaling
+    const object = state.objects.find(o => o.id === objectId);
+    if (object) {
+      initialScaleRef.current = [...object.scale];
+    }
     console.log('Grabbed object:', objectId);
-  }, []);
+  }, [state.objects]);
 
   const handleRelease = useCallback((objectId: string, position: Vector3Tuple) => {
     // Calculate resting position (for stacking)
@@ -59,18 +65,18 @@ function SandboxApp() {
     updateObjectPosition(objectId, constrainedPosition);
   }, [updateObjectPosition]);
 
+  // Store initial scale when grab starts
+  const initialScaleRef = useRef<Vector3Tuple>([1, 1, 1]);
+  
   const handleScale = useCallback((objectId: string, scaleFactor: number) => {
-    const object = state.objects.find(o => o.id === objectId);
-    if (object) {
-      const clampedScale = Math.max(0.2, Math.min(3, scaleFactor));
-      const newScale: Vector3Tuple = [
-        object.scale[0] * clampedScale,
-        object.scale[1] * clampedScale,
-        object.scale[2] * clampedScale,
-      ];
-      updateObjectScale(objectId, newScale);
-    }
-  }, [state.objects, updateObjectScale]);
+    // Scale factor is already computed relative to initial
+    const newScale: Vector3Tuple = [
+      initialScaleRef.current[0] * scaleFactor,
+      initialScaleRef.current[1] * scaleFactor,
+      initialScaleRef.current[2] * scaleFactor,
+    ];
+    updateObjectScale(objectId, newScale);
+  }, [updateObjectScale]);
 
   const { processHands } = useGestureRecognition({
     onGrab: handleGrab,
@@ -79,27 +85,32 @@ function SandboxApp() {
     onScale: handleScale,
   });
 
+  // Store processHands in ref to avoid effect re-runs
+  const processHandsRef = useRef(processHands);
+  useEffect(() => {
+    processHandsRef.current = processHands;
+  }, [processHands]);
+
   // Voice recognition
   const { isListening: isVoiceListening, startListening: startVoice } = useVoiceRecognition();
 
   // Camera ready callback
   const handleCameraReady = useCallback((camera: THREE.Camera) => {
+    console.log('App: Camera ready callback received');
     cameraRef.current = camera;
+    setIsCameraReady(true);
   }, []);
 
-  // Request permissions and start tracking
+  // Request permissions - just mark as ready, tracking starts after render
   const requestPermissions = useCallback(async () => {
     try {
-      // Request camera permission
-      await navigator.mediaDevices.getUserMedia({ video: true });
+      // Request camera permission (pre-check)
+      await navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+        // Stop this test stream, we'll start the real one after render
+        stream.getTracks().forEach(track => track.stop());
+      });
+      
       setPermissions(true);
-      
-      // Start hand tracking
-      await startTracking();
-      
-      // Start voice recognition
-      startVoice();
-      
       setIsReady(true);
       setLoading(false);
     } catch (err) {
@@ -107,24 +118,50 @@ function SandboxApp() {
       setPermissions(false);
       setLoading(false);
     }
-  }, [startTracking, startVoice, setPermissions, setLoading]);
+  }, [setPermissions, setLoading]);
 
-  // Process hand tracking on each frame
+  // Start tracking after component renders with video element
   useEffect(() => {
-    if (!isTracking || !cameraRef.current) return;
+    if (isReady && !isTracking && !isHandTrackingLoading) {
+      // Small delay to ensure video element is in DOM
+      const timer = setTimeout(() => {
+        console.log('Starting hand tracking...');
+        startTracking();
+        startVoice();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isReady, isTracking, isHandTrackingLoading, startTracking, startVoice]);
 
+  // Store hands in a ref to avoid re-running effect on every hand update
+  const handsRef = useRef<HandLandmarks[]>([]);
+  useEffect(() => {
+    handsRef.current = state.handTracking.hands;
+  }, [state.handTracking.hands]);
+
+  // Process hand tracking on each frame - only depends on tracking/camera state
+  useEffect(() => {
+    if (!isTracking || !isCameraReady || !cameraRef.current) {
+      return;
+    }
+
+    console.log('Hand tracking processing loop started');
+    
     const processFrame = () => {
-      if (state.handTracking.hands.length > 0 && cameraRef.current) {
-        processHands(state.handTracking.hands, cameraRef.current);
+      if (handsRef.current.length > 0 && cameraRef.current) {
+        processHandsRef.current(handsRef.current, cameraRef.current);
       }
     };
 
     const intervalId = setInterval(processFrame, 33); // ~30fps
-    return () => clearInterval(intervalId);
-  }, [isTracking, state.handTracking.hands, processHands]);
+    return () => {
+      console.log('Hand tracking processing loop stopped');
+      clearInterval(intervalId);
+    };
+  }, [isTracking, isCameraReady]);
 
-  // Loading state
-  if (isHandTrackingLoading || state.isLoading) {
+  // Loading state - only wait for MediaPipe to initialize
+  if (isHandTrackingLoading) {
     return (
       <div className="loading-screen">
         <div className="loading-spinner" />

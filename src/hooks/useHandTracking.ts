@@ -1,7 +1,24 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Hands, Results, NormalizedLandmark } from '@mediapipe/hands';
-import { Camera } from '@mediapipe/camera_utils';
+import type { NormalizedLandmark } from '@mediapipe/hands';
 import type { HandLandmarks } from '@/types';
+
+// Dynamic import types
+interface MediaPipeHands {
+  setOptions: (options: {
+    maxNumHands: number;
+    modelComplexity: number;
+    minDetectionConfidence: number;
+    minTrackingConfidence: number;
+  }) => void;
+  onResults: (callback: (results: MediaPipeResults) => void) => void;
+  send: (input: { image: HTMLVideoElement }) => Promise<void>;
+  close: () => void;
+}
+
+interface MediaPipeResults {
+  multiHandLandmarks?: NormalizedLandmark[][];
+  multiHandedness?: { label: string }[];
+}
 
 interface UseHandTrackingOptions {
   onResults: (hands: HandLandmarks[]) => void;
@@ -20,6 +37,35 @@ interface UseHandTrackingReturn {
   stopTracking: () => void;
 }
 
+// Load MediaPipe from CDN with specific version
+async function loadMediaPipeHands(): Promise<new (config: { locateFile: (file: string) => string }) => MediaPipeHands> {
+  return new Promise((resolve, reject) => {
+    // Check if already loaded
+    if ((window as any).Hands) {
+      resolve((window as any).Hands);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.min.js';
+    script.crossOrigin = 'anonymous';
+    
+    script.onload = () => {
+      // Give it a moment to register
+      setTimeout(() => {
+        if ((window as any).Hands) {
+          resolve((window as any).Hands);
+        } else {
+          reject(new Error('MediaPipe Hands not found after script load'));
+        }
+      }, 100);
+    };
+    
+    script.onerror = () => reject(new Error('Failed to load MediaPipe Hands script'));
+    document.head.appendChild(script);
+  });
+}
+
 export function useHandTracking({
   onResults,
   maxNumHands = 2,
@@ -28,149 +74,216 @@ export function useHandTracking({
 }: UseHandTrackingOptions): UseHandTrackingReturn {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const handsRef = useRef<Hands | null>(null);
-  const cameraRef = useRef<Camera | null>(null);
+  const handsRef = useRef<MediaPipeHands | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const onResultsRef = useRef(onResults);
+  const isTrackingRef = useRef(false);
   
   const [isLoading, setIsLoading] = useState(true);
   const [isTracking, setIsTracking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Process MediaPipe results
-  const processResults = useCallback((results: Results) => {
-    const hands: HandLandmarks[] = [];
+  // Keep onResults ref up to date
+  useEffect(() => {
+    onResultsRef.current = onResults;
+  }, [onResults]);
 
-    if (results.multiHandLandmarks && results.multiHandedness) {
-      for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-        const landmarks = results.multiHandLandmarks[i];
-        const handedness = results.multiHandedness[i];
+  // Keep isTracking ref in sync
+  useEffect(() => {
+    isTrackingRef.current = isTracking;
+  }, [isTracking]);
+
+  // Initialize MediaPipe Hands on mount
+  useEffect(() => {
+    let mounted = true;
+
+    async function init() {
+      try {
+        console.log('Loading MediaPipe Hands...');
+        const Hands = await loadMediaPipeHands();
         
-        hands.push({
-          landmarks: landmarks as NormalizedLandmark[],
-          handedness: handedness.label as 'Left' | 'Right',
+        if (!mounted) return;
+        console.log('MediaPipe Hands loaded, initializing...');
+        
+        const hands = new Hands({
+          locateFile: (file: string) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`;
+          },
         });
-      }
-    }
 
-    onResults(hands);
+        hands.setOptions({
+          maxNumHands,
+          modelComplexity: 1,
+          minDetectionConfidence,
+          minTrackingConfidence,
+        });
 
-    // Draw landmarks on canvas for visualization
-    if (canvasRef.current && videoRef.current) {
-      const ctx = canvasRef.current.getContext('2d');
-      if (ctx) {
-        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-        
-        if (results.multiHandLandmarks) {
-          for (const landmarks of results.multiHandLandmarks) {
-            drawLandmarks(ctx, landmarks, canvasRef.current.width, canvasRef.current.height);
+        hands.onResults((results: MediaPipeResults) => {
+          const handResults: HandLandmarks[] = [];
+
+          if (results.multiHandLandmarks && results.multiHandedness) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+              const landmarks = results.multiHandLandmarks[i];
+              const handedness = results.multiHandedness[i];
+              
+              handResults.push({
+                landmarks: landmarks as NormalizedLandmark[],
+                handedness: handedness.label as 'Left' | 'Right',
+              });
+            }
           }
+
+          onResultsRef.current(handResults);
+
+          // Draw landmarks on canvas for visualization
+          if (canvasRef.current) {
+            const ctx = canvasRef.current.getContext('2d');
+            if (ctx) {
+              ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+              
+              if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                  drawLandmarks(ctx, landmarks, canvasRef.current.width, canvasRef.current.height);
+                }
+              }
+            }
+          }
+        });
+
+        handsRef.current = hands;
+        
+        if (mounted) {
+          console.log('MediaPipe Hands initialized successfully');
+          setIsLoading(false);
+        }
+      } catch (err) {
+        console.error('Failed to initialize MediaPipe Hands:', err);
+        if (mounted) {
+          setError('Failed to initialize hand tracking: ' + (err as Error).message);
+          setIsLoading(false);
         }
       }
     }
-  }, [onResults]);
 
-  // Initialize MediaPipe Hands
-  const initializeHands = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
+    init();
 
-      const hands = new Hands({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        },
-      });
+    return () => {
+      mounted = false;
+      if (handsRef.current) {
+        handsRef.current.close();
+        handsRef.current = null;
+      }
+    };
+  }, [maxNumHands, minDetectionConfidence, minTrackingConfidence]);
 
-      hands.setOptions({
-        maxNumHands,
-        modelComplexity: 1,
-        minDetectionConfidence,
-        minTrackingConfidence,
-      });
+  // Detection loop
+  const runDetection = useCallback(async () => {
+    if (!handsRef.current || !videoRef.current || !isTrackingRef.current) return;
 
-      hands.onResults(processResults);
-
-      await hands.initialize();
-      handsRef.current = hands;
-      setIsLoading(false);
-    } catch (err) {
-      console.error('Failed to initialize MediaPipe Hands:', err);
-      setError('Failed to initialize hand tracking');
-      setIsLoading(false);
+    if (videoRef.current.readyState >= 2) {
+      try {
+        await handsRef.current.send({ image: videoRef.current });
+      } catch (e) {
+        // Ignore send errors during cleanup
+      }
     }
-  }, [maxNumHands, minDetectionConfidence, minTrackingConfidence, processResults]);
+
+    if (isTrackingRef.current) {
+      animationFrameRef.current = requestAnimationFrame(runDetection);
+    }
+  }, []);
 
   // Start tracking
   const startTracking = useCallback(async () => {
-    if (!videoRef.current || !handsRef.current) {
-      setError('Video element or Hands not initialized');
+    console.log('startTracking called', { 
+      handsReady: !!handsRef.current, 
+      videoReady: !!videoRef.current 
+    });
+
+    if (!handsRef.current) {
+      console.warn('Hand tracking not initialized yet, retrying in 500ms...');
+      setTimeout(() => startTracking(), 500);
+      return;
+    }
+
+    if (!videoRef.current) {
+      console.warn('Video element not available, retrying in 500ms...');
+      setTimeout(() => startTracking(), 500);
       return;
     }
 
     try {
+      console.log('Requesting camera access...');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          width: 640,
-          height: 480,
+          width: { ideal: 640 },
+          height: { ideal: 480 },
           facingMode: 'user',
         },
       });
 
+      console.log('Camera stream obtained');
+      streamRef.current = stream;
       videoRef.current.srcObject = stream;
+      
+      await new Promise<void>((resolve) => {
+        if (videoRef.current) {
+          videoRef.current.onloadedmetadata = () => {
+            console.log('Video metadata loaded');
+            resolve();
+          };
+        }
+      });
+      
       await videoRef.current.play();
+      console.log('Video playing');
 
       // Set canvas size
       if (canvasRef.current) {
-        canvasRef.current.width = videoRef.current.videoWidth;
-        canvasRef.current.height = videoRef.current.videoHeight;
+        canvasRef.current.width = videoRef.current.videoWidth || 640;
+        canvasRef.current.height = videoRef.current.videoHeight || 480;
       }
 
-      const camera = new Camera(videoRef.current, {
-        onFrame: async () => {
-          if (handsRef.current && videoRef.current) {
-            await handsRef.current.send({ image: videoRef.current });
-          }
-        },
-        width: 640,
-        height: 480,
-      });
-
-      await camera.start();
-      cameraRef.current = camera;
       setIsTracking(true);
+      isTrackingRef.current = true;
+      
+      console.log('Hand tracking started successfully');
+      // Start detection loop
+      runDetection();
     } catch (err) {
       console.error('Failed to start camera:', err);
       setError('Failed to access camera. Please grant camera permissions.');
     }
-  }, []);
+  }, [runDetection]);
 
   // Stop tracking
   const stopTracking = useCallback(() => {
-    if (cameraRef.current) {
-      cameraRef.current.stop();
-      cameraRef.current = null;
+    isTrackingRef.current = false;
+    
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
 
-    if (videoRef.current?.srcObject) {
-      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach((track) => track.stop());
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
 
     setIsTracking(false);
   }, []);
 
-  // Initialize on mount
+  // Cleanup on unmount
   useEffect(() => {
-    initializeHands();
-
     return () => {
       stopTracking();
-      if (handsRef.current) {
-        handsRef.current.close();
-        handsRef.current = null;
-      }
     };
-  }, [initializeHands, stopTracking]);
+  }, [stopTracking]);
 
   return {
     videoRef,

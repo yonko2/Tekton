@@ -19,9 +19,40 @@ const generateId = (): string => {
   return `obj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 };
 
+// Initial objects for the scene
+const initialObjects: SceneObject[] = [
+  {
+    id: 'initial_cube',
+    type: 'cube',
+    position: [-2, 0.5, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    color: '#e53935', // red
+    isSelected: false,
+  },
+  {
+    id: 'initial_sphere',
+    type: 'sphere',
+    position: [0, 0.5, 0],
+    rotation: [0, 0, 0],
+    scale: [0.8, 0.8, 0.8],
+    color: '#1e88e5', // blue
+    isSelected: false,
+  },
+  {
+    id: 'initial_cylinder',
+    type: 'cylinder',
+    position: [2, 1, 0],
+    rotation: [0, 0, 0],
+    scale: [0.6, 1, 0.6],
+    color: '#43a047', // green
+    isSelected: false,
+  },
+];
+
 // Initial state
 const initialState: SandboxState = {
-  objects: [],
+  objects: initialObjects,
   selectedObjectId: null,
   pointer: {
     visible: false,

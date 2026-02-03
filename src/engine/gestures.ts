@@ -116,6 +116,13 @@ export function getPointingDirection(landmarks: NormalizedLandmark[]): { x: numb
   };
 }
 
+// Get hand size (wrist to middle fingertip distance) as proxy for camera distance
+export function getHandSize(landmarks: NormalizedLandmark[]): number {
+  const wrist = landmarks[HAND_LANDMARKS.WRIST];
+  const middleTip = landmarks[HAND_LANDMARKS.MIDDLE_TIP];
+  return distance2D(wrist, middleTip);
+}
+
 // Get the center of the palm
 export function getPalmCenter(landmarks: NormalizedLandmark[]): NormalizedLandmark {
   const palmLandmarks = [
@@ -142,27 +149,9 @@ export function getPalmCenter(landmarks: NormalizedLandmark[]): NormalizedLandma
 export function detectGesture(landmarks: NormalizedLandmark[]): GestureType {
   const fingers = getFingerStates(landmarks);
   const pinching = isPinching(landmarks);
-  
-  // Count extended fingers
-  const extendedCount = [
-    fingers.thumb,
-    fingers.index,
-    fingers.middle,
-    fingers.ring,
-    fingers.pinky,
-  ].filter(Boolean).length;
 
-  // Pinch gesture (thumb and index together, other fingers can vary)
+  // Pinch gesture (thumb and index close together)
   if (pinching) {
-    // Two-finger pinch: thumb and index pinching, middle also close
-    const middleTip = landmarks[HAND_LANDMARKS.MIDDLE_TIP];
-    const thumbTip = landmarks[HAND_LANDMARKS.THUMB_TIP];
-    const middlePinchDist = distance(middleTip, thumbTip);
-    
-    if (middlePinchDist < 0.08 && !fingers.ring && !fingers.pinky) {
-      return 'two_finger_pinch';
-    }
-    
     return 'pinch';
   }
 
@@ -171,67 +160,7 @@ export function detectGesture(landmarks: NormalizedLandmark[]): GestureType {
     return 'point';
   }
 
-  // Open palm (all fingers extended)
-  if (extendedCount >= 4) {
-    return 'open_palm';
-  }
-
-  // Fist (no fingers extended)
-  if (extendedCount === 0) {
-    return 'fist';
-  }
-
   return 'none';
-}
-
-// Swipe detection state
-interface SwipeState {
-  startX: number;
-  startTime: number;
-  isTracking: boolean;
-}
-
-const swipeState: SwipeState = {
-  startX: 0,
-  startTime: 0,
-  isTracking: false,
-};
-
-// Detect swipe gesture
-export function detectSwipe(
-  landmarks: NormalizedLandmark[],
-  gesture: GestureType
-): GestureType | null {
-  const palmCenter = getPalmCenter(landmarks);
-  const currentTime = Date.now();
-
-  if (gesture === 'open_palm') {
-    if (!swipeState.isTracking) {
-      swipeState.startX = palmCenter.x;
-      swipeState.startTime = currentTime;
-      swipeState.isTracking = true;
-      return null;
-    }
-
-    const deltaX = palmCenter.x - swipeState.startX;
-    const deltaTime = currentTime - swipeState.startTime;
-
-    // Check for swipe (movement threshold and time limit)
-    if (deltaTime < 500 && Math.abs(deltaX) > 0.15) {
-      swipeState.isTracking = false;
-      return deltaX > 0 ? 'swipe_right' : 'swipe_left';
-    }
-
-    // Reset if too slow
-    if (deltaTime > 500) {
-      swipeState.startX = palmCenter.x;
-      swipeState.startTime = currentTime;
-    }
-  } else {
-    swipeState.isTracking = false;
-  }
-
-  return null;
 }
 
 // Get pointer position from index fingertip (normalized 0-1)
@@ -268,7 +197,6 @@ export interface GestureResult {
 export function processHandGesture(hand: HandLandmarks): GestureResult {
   const { landmarks } = hand;
   const gesture = detectGesture(landmarks);
-  const swipe = detectSwipe(landmarks, gesture);
   const pinchDist = getPinchDistance(landmarks);
   const pinching = isPinching(landmarks);
   const fingerStates = getFingerStates(landmarks);
@@ -286,7 +214,7 @@ export function processHandGesture(hand: HandLandmarks): GestureResult {
   }
 
   return {
-    gesture: swipe || gesture,
+    gesture,
     pinchDistance: pinchDist,
     isPinching: pinching,
     pointerPosition,

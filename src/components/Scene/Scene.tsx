@@ -14,6 +14,7 @@ function CameraCapture({ onCameraReady }: { onCameraReady?: (camera: THREE.Camer
   const { camera } = useThree();
   
   useEffect(() => {
+    console.log('CameraCapture: Camera available, calling onCameraReady');
     onCameraReady?.(camera);
   }, [camera, onCameraReady]);
   

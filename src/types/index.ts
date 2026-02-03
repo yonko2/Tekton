@@ -36,12 +36,7 @@ export interface HandTrackingState {
 export type GestureType = 
   | 'none'
   | 'point'
-  | 'pinch'
-  | 'open_palm'
-  | 'fist'
-  | 'two_finger_pinch'
-  | 'swipe_left'
-  | 'swipe_right';
+  | 'pinch';
 
 export interface GestureState {
   currentGesture: GestureType;

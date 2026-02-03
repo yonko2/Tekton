@@ -1,48 +1,19 @@
-import { useRef, useEffect } from 'react';
-import { useThree, useFrame } from '@react-three/fiber';
-import * as THREE from 'three';
+import { useThree } from '@react-three/fiber';
 import { useSandbox } from '@/context/SandboxContext';
-import { SCENE_CONFIG } from '@/types';
 
 export function CameraController() {
   const { camera } = useThree();
-  const { state, setCamera } = useSandbox();
-  const targetPosition = useRef(new THREE.Vector3(...SCENE_CONFIG.camera.position));
-  const targetLookAt = useRef(new THREE.Vector3(0, 0, 0));
-  const isAnimating = useRef(false);
+  const { state } = useSandbox();
 
-  // Reset camera to default position
-  const resetCamera = () => {
-    targetPosition.current.set(...SCENE_CONFIG.camera.position);
-    targetLookAt.current.set(0, 0, 0);
-    isAnimating.current = true;
-  };
-
-  // Update camera position from state
-  useEffect(() => {
-    if (state.gesture.currentGesture === 'fist') {
-      resetCamera();
-    }
-  }, [state.gesture.currentGesture]);
-
-  // Smooth camera animation
-  useFrame(() => {
-    if (isAnimating.current) {
-      const currentPos = new THREE.Vector3().copy(camera.position);
-      const diff = targetPosition.current.clone().sub(currentPos);
-      
-      if (diff.length() > 0.01) {
-        camera.position.lerp(targetPosition.current, 0.05);
-        camera.lookAt(targetLookAt.current);
-      } else {
-        isAnimating.current = false;
-        setCamera({
-          position: [camera.position.x, camera.position.y, camera.position.z],
-          target: [targetLookAt.current.x, targetLookAt.current.y, targetLookAt.current.z],
-        });
-      }
-    }
-  });
+  // Sync camera position from state (controlled by gesture recognition)
+  if (state.camera.position) {
+    camera.position.set(
+      state.camera.position[0],
+      state.camera.position[1],
+      state.camera.position[2]
+    );
+    camera.lookAt(0, 0, 0);
+  }
 
   return null;
 }

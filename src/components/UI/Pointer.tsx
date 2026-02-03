@@ -25,6 +25,7 @@ export function Pointer3D() {
   const groupRef = useRef<THREE.Group>(null);
   const ringRef = useRef<THREE.Mesh>(null);
   const innerRef = useRef<THREE.Mesh>(null);
+  const lastLogRef = useRef(0);
 
   useFrame((_, delta) => {
     if (ringRef.current) {
@@ -36,6 +37,13 @@ export function Pointer3D() {
       // Pulse the inner sphere
       const scale = 1 + Math.sin(Date.now() * 0.005) * 0.1;
       innerRef.current.scale.setScalar(scale);
+    }
+
+    // Debug log (throttled)
+    const now = Date.now();
+    if (state.pointer.visible && now - lastLogRef.current > 1000) {
+      console.log('Pointer3D rendering at:', state.pointer.position);
+      lastLogRef.current = now;
     }
   });
 
