@@ -6,7 +6,7 @@ import { Overlay } from '@/components/UI';
 import { useHandTracking } from '@/hooks/useHandTracking';
 import { useGestureRecognition } from '@/hooks/useGestureRecognition';
 import { useVoiceRecognition } from '@/hooks/useVoiceRecognition';
-import { calculateRestingPosition, constrainToGround } from '@/engine/physics';
+import { calculateRestingPosition, constrainToGround, checkCollision } from '@/engine/physics';
 import type { HandLandmarks, Vector3Tuple } from '@/types';
 
 // Inner component that uses the sandbox context
@@ -61,9 +61,19 @@ function SandboxApp() {
   }, [state.objects, updateObjectPosition]);
 
   const handleMove = useCallback((objectId: string, position: Vector3Tuple) => {
-    const constrainedPosition = constrainToGround(position);
+    const object = state.objects.find(o => o.id === objectId);
+    if (!object) return;
+    
+    // Check for collisions with other objects
+    const { adjustedPosition } = checkCollision(
+      object,
+      position,
+      state.objects.filter(o => o.id !== objectId)
+    );
+    
+    const constrainedPosition = constrainToGround(adjustedPosition);
     updateObjectPosition(objectId, constrainedPosition);
-  }, [updateObjectPosition]);
+  }, [state.objects, updateObjectPosition]);
 
   // Store initial scale when grab starts
   const initialScaleRef = useRef<Vector3Tuple>([1, 1, 1]);

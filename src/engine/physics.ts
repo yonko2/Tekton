@@ -126,31 +126,55 @@ export function checkCollision(
   newPosition: Vector3Tuple,
   otherObjects: SceneObject[]
 ): { collides: boolean; adjustedPosition: Vector3Tuple } {
-  const testObject: SceneObject = {
-    ...movingObject,
-    position: newPosition,
-  };
+  let adjustedPos: Vector3Tuple = [...newPosition];
+  let hasCollision = false;
   
-  const testBox = getObjectBoundingBox(testObject);
+  const movingYOffset = getObjectYOffset(movingObject.type, movingObject.scale);
   
   for (const other of otherObjects) {
     if (other.id === movingObject.id) continue;
     
+    const testObject: SceneObject = {
+      ...movingObject,
+      position: adjustedPos,
+    };
+    
+    const testBox = getObjectBoundingBox(testObject);
     const otherBox = getObjectBoundingBox(other);
     
     if (boxesIntersect(testBox, otherBox)) {
-      // Collision detected - push up
-      const pushUpY = otherBox.max[1] + getObjectYOffset(movingObject.type, movingObject.scale);
-      return {
-        collides: true,
-        adjustedPosition: [newPosition[0], pushUpY, newPosition[2]],
-      };
+      hasCollision = true;
+      
+      // Calculate overlap in each axis
+      const overlapX = Math.min(testBox.max[0] - otherBox.min[0], otherBox.max[0] - testBox.min[0]);
+      const overlapY = Math.min(testBox.max[1] - otherBox.min[1], otherBox.max[1] - testBox.min[1]);
+      const overlapZ = Math.min(testBox.max[2] - otherBox.min[2], otherBox.max[2] - testBox.min[2]);
+      
+      // Push out along the axis with smallest overlap
+      if (overlapY <= overlapX && overlapY <= overlapZ) {
+        // Push up (most common for stacking)
+        adjustedPos[1] = otherBox.max[1] + movingYOffset;
+      } else if (overlapX <= overlapZ) {
+        // Push along X
+        if (adjustedPos[0] > other.position[0]) {
+          adjustedPos[0] = otherBox.max[0] + (testBox.max[0] - testBox.min[0]) / 2 + 0.01;
+        } else {
+          adjustedPos[0] = otherBox.min[0] - (testBox.max[0] - testBox.min[0]) / 2 - 0.01;
+        }
+      } else {
+        // Push along Z
+        if (adjustedPos[2] > other.position[2]) {
+          adjustedPos[2] = otherBox.max[2] + (testBox.max[2] - testBox.min[2]) / 2 + 0.01;
+        } else {
+          adjustedPos[2] = otherBox.min[2] - (testBox.max[2] - testBox.min[2]) / 2 - 0.01;
+        }
+      }
     }
   }
   
   return {
-    collides: false,
-    adjustedPosition: newPosition,
+    collides: hasCollision,
+    adjustedPosition: adjustedPos,
   };
 }
 
