@@ -4,43 +4,43 @@ overview: Create a React TypeScript application with Three.js that provides a 3D
 todos:
   - id: setup
     content: Initialize Vite + React + TypeScript project with dependencies
-    status: pending
+    status: completed
   - id: types
     content: Create TypeScript interfaces and type definitions
-    status: pending
+    status: completed
   - id: context
     content: Implement SandboxContext for global state management
-    status: pending
+    status: completed
   - id: scene
     content: Create 3D scene with ground plane, lighting, and shadows
-    status: pending
+    status: completed
   - id: objects
     content: Implement SceneObject component and object factory for predefined shapes
-    status: pending
+    status: completed
   - id: hand-tracking
     content: Integrate MediaPipe Hands with useHandTracking hook
-    status: pending
+    status: completed
   - id: gestures
     content: Implement gesture recognition engine (point, pinch, pan, scale)
-    status: pending
+    status: completed
   - id: pointer
     content: Create pointer visualization that follows hand position
-    status: pending
+    status: completed
   - id: manipulation
     content: Implement object selection, movement, and scaling via gestures
-    status: pending
+    status: completed
   - id: camera
     content: Add gesture-based camera controls (pan, rotate, reset)
-    status: pending
+    status: completed
   - id: voice
     content: Integrate Web Speech API for voice commands
-    status: pending
+    status: completed
   - id: stacking
     content: Implement basic stacking/collision detection for objects
-    status: pending
+    status: completed
   - id: ui
     content: Create overlay UI with hand visualization and voice indicator
-    status: pending
+    status: completed
 isProject: false
 ---
 
