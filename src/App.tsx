@@ -8,7 +8,7 @@ import { useGestureRecognition } from '@/hooks/useGestureRecognition';
 import { useVoiceRecognition } from '@/hooks/useVoiceRecognition';
 import type { HandData } from '@/types';
 
-// ── Inner app (needs SandboxContext) ─────────────────────────
+
 function SandboxApp() {
   const { setHandTracking, setLoading, setPermissions } = useSandbox();
 
@@ -16,7 +16,7 @@ function SandboxApp() {
   const cameraRef = useRef<THREE.Camera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
 
-  // ── Hand tracking ────────────────────────────────────────
+  
   const handleHandResults = useCallback(
     (hands: HandData[]) => {
       setHandTracking({
@@ -37,18 +37,18 @@ function SandboxApp() {
     startTracking,
   } = useHandTracking({ onResults: handleHandResults });
 
-  // ── Gesture recognition ──────────────────────────────────
+  
   const { processHands } = useGestureRecognition();
   const processHandsRef = useRef(processHands);
   useEffect(() => {
     processHandsRef.current = processHands;
   }, [processHands]);
 
-  // ── Voice recognition ────────────────────────────────────
+  
   const { isListening: isVoiceListening, startListening: startVoice } =
     useVoiceRecognition();
 
-  // ── Scene ready callback ─────────────────────────────────
+  
   const handleSceneReady = useCallback(
     (camera: THREE.Camera, scene: THREE.Scene) => {
       cameraRef.current = camera;
@@ -57,7 +57,7 @@ function SandboxApp() {
     [],
   );
 
-  // ── Request permissions ──────────────────────────────────
+  
   const requestPermissions = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -72,7 +72,7 @@ function SandboxApp() {
     }
   }, [setPermissions, setLoading]);
 
-  // ── Start tracking once ready (run only once) ──────────────
+  
   const hasStartedRef = useRef(false);
   useEffect(() => {
     if (isReady && !hasStartedRef.current) {
@@ -85,14 +85,14 @@ function SandboxApp() {
     }
   }, [isReady, startTracking, startVoice]);
 
-  // ── Hands ref for frame loop (avoid dependency churn) ────
+  
   const handsRef = useRef<HandData[]>([]);
   const { state } = useSandbox();
   useEffect(() => {
     handsRef.current = state.handTracking.hands;
   }, [state.handTracking.hands]);
 
-  // ── Per-frame gesture processing ─────────────────────────
+  
   useEffect(() => {
     if (!isTracking || !cameraRef.current || !sceneRef.current) return;
 
@@ -102,11 +102,11 @@ function SandboxApp() {
       }
     };
 
-    const id = setInterval(tick, 33); // ~30 fps
+    const id = setInterval(tick, 33); 
     return () => clearInterval(id);
   }, [isTracking]);
 
-  // ── Permission gate (only full-screen blocker) ─────────────
+  
   if (!isReady) {
     return (
       <div className="permission-prompt">
@@ -123,8 +123,8 @@ function SandboxApp() {
     );
   }
 
-  // Once ready, always render Scene + Overlay (keeps video element mounted).
-  // Loading is shown as a non-destructive overlay on top.
+  
+  
   return (
     <div className="app-container">
       <Scene onReady={handleSceneReady} />
@@ -146,7 +146,7 @@ function SandboxApp() {
   );
 }
 
-// ── Root wrapper ─────────────────────────────────────────────
+
 export default function App() {
   return (
     <SandboxProvider>

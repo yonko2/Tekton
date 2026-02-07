@@ -10,7 +10,7 @@ import { Pointer3D } from './Pointer3D';
 import { CameraController } from '@/components/Camera/CameraController';
 import { SCENE_CONFIG } from '@/types';
 
-// ── Expose camera + scene refs to parent ─────────────────────
+
 function SceneCapture({
   onReady,
 }: {
@@ -23,7 +23,7 @@ function SceneCapture({
   return null;
 }
 
-// ── Scene content (inside Canvas) ────────────────────────────
+
 function SceneContent({
   onReady,
 }: {
@@ -48,7 +48,7 @@ function SceneContent({
   );
 }
 
-// ── Public Scene component ───────────────────────────────────
+
 interface SceneProps {
   onReady?: (camera: THREE.Camera, scene: THREE.Scene) => void;
 }

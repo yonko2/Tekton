@@ -6,7 +6,7 @@ import type { SceneObject as SceneObjectType, ShapeType } from '@/types';
 import { rigidBodyRefs } from '@/hooks/useGestureRecognition';
 import { grabState } from '@/engine/grabStore';
 
-// ── Shape geometry ───────────────────────────────────────────
+
 function ShapeGeometry({ type }: { type: ShapeType }) {
   const pyramidGeo = useMemo(() => {
     if (type !== 'pyramid') return null;
@@ -33,7 +33,7 @@ function ShapeGeometry({ type }: { type: ShapeType }) {
   }
 }
 
-// ── Collider selector ────────────────────────────────────────
+
 function colliderFor(type: ShapeType): 'cuboid' | 'ball' | 'hull' {
   switch (type) {
     case 'cube':
@@ -46,7 +46,7 @@ function colliderFor(type: ShapeType): 'cuboid' | 'ball' | 'hull' {
   }
 }
 
-// ── PhysicsObject ────────────────────────────────────────────
+
 interface PhysicsObjectProps {
   object: SceneObjectType;
   onPointerOver?: () => void;
@@ -63,14 +63,14 @@ export function PhysicsObject({
   const rbRef = useRef<RapierRigidBody>(null);
   const meshRef = useRef<THREE.Mesh>(null);
 
-  // Track whether THIS object is currently grabbed (local to this component)
+  
   const isGrabbed = useRef(false);
   const wireRef = useRef<THREE.Mesh>(null);
 
-  // Quaternion captured at the moment the grab starts (live from physics body)
+  
   const grabStartQuat = useRef(new THREE.Quaternion());
 
-  // Register rigid-body ref in the global map
+  
   const rbRefStable = useRef<React.RefObject<RapierRigidBody | null>>(rbRef);
   useEffect(() => {
     rigidBodyRefs.set(object.id, rbRefStable.current);
@@ -79,32 +79,32 @@ export function PhysicsObject({
     };
   }, [object.id]);
 
-  // ── Per-frame: read grab store and drive the body ──────────
+  
   useFrame(() => {
     const rb = rbRef.current;
     if (!rb) return;
 
     const amGrabbed = grabState.objectId === object.id;
 
-    // ── Transition: not grabbed → grabbed ────────────────────
+    
     if (amGrabbed && !isGrabbed.current) {
       isGrabbed.current = true;
-      rb.setBodyType(2, true); // KinematicPositionBased
+      rb.setBodyType(2, true); 
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
 
-      // Snapshot the body's LIVE rotation from physics (not stale React state)
+      
       const r = rb.rotation();
       grabStartQuat.current.set(r.x, r.y, r.z, r.w);
     }
 
-    // ── While grabbed: follow position, rotation & live scale ─
+    
     if (amGrabbed && isGrabbed.current) {
       const [tx, ty, tz] = grabState.targetPosition;
       rb.setNextKinematicTranslation({ x: tx, y: ty, z: tz });
 
-      // Apply twist delta around the camera's forward axis (captured at grab start).
-      // This rotates the object in the user's view plane regardless of camera angle.
+      
+      
       const [ax, ay, az] = grabState.twistAxis;
       const twistQ = new THREE.Quaternion().setFromAxisAngle(
         new THREE.Vector3(ax, ay, az),
@@ -113,7 +113,7 @@ export function PhysicsObject({
       const finalQ = twistQ.clone().multiply(grabStartQuat.current);
       rb.setNextKinematicRotation({ x: finalQ.x, y: finalQ.y, z: finalQ.z, w: finalQ.w });
 
-      // Apply live scale factor from two-hand gesture to the mesh visuals
+      
       const f = grabState.scaleFactor;
       const sx = object.scale[0] * f;
       const sy = object.scale[1] * f;
@@ -122,14 +122,14 @@ export function PhysicsObject({
       if (wireRef.current) wireRef.current.scale.set(sx * 1.06, sy * 1.06, sz * 1.06);
     }
 
-    // ── Pending release ──────────────────────────────────────
+    
     if (amGrabbed && grabState.pendingRelease) {
       isGrabbed.current = false;
-      rb.setBodyType(0, true); // Dynamic
+      rb.setBodyType(0, true); 
       const [vx, vy, vz] = grabState.releaseVelocity;
       rb.setLinvel({ x: vx, y: vy, z: vz }, true);
 
-      // Clear the grab store
+      
       grabState.objectId = null;
       grabState.twistAngle = 0;
       grabState.twistAxis = [0, 0, -1];
@@ -138,18 +138,18 @@ export function PhysicsObject({
       grabState.releaseVelocity = [0, 0, 0];
     }
 
-    // ── Transition: was grabbed but store says someone else / nobody ──
+    
     if (!amGrabbed && isGrabbed.current) {
       isGrabbed.current = false;
-      rb.setBodyType(0, true); // Dynamic
+      rb.setBodyType(0, true); 
     }
 
-    // Reset mesh scale to the committed prop value when not grabbed
+    
     if (!isGrabbed.current && meshRef.current) {
       meshRef.current.scale.set(object.scale[0], object.scale[1], object.scale[2]);
     }
 
-    // Selection floating animation
+    
     if (meshRef.current) {
       meshRef.current.position.y = object.isSelected && !isGrabbed.current
         ? Math.sin(performance.now() / 500) * 0.04

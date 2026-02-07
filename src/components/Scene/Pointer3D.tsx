@@ -28,7 +28,7 @@ export function Pointer3D() {
     meshRef.current.position.set(x, y, z);
     glowRef.current.position.set(x, y, z);
 
-    // Pulsing scale
+    
     const pulse = 1 + Math.sin(clock.elapsedTime * 4) * 0.15;
     glowRef.current.scale.setScalar(pulse);
   });

@@ -3,12 +3,12 @@ import { useSandbox } from '@/context/SandboxContext';
 import { parseShapeType, parseColorName, getColorHex, getRandomColor } from '@/constants/shapes';
 import type { VoiceCommand, Vector3Tuple } from '@/types';
 
-// ── Browser SpeechRecognition shim ───────────────────────────
+
 type SpeechRecognitionType = typeof window extends { SpeechRecognition: infer T } ? T : unknown;
 
 function getSpeechRecognition(): SpeechRecognitionType | null {
   if (typeof window === 'undefined') return null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   return (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition ?? null;
 }
 
@@ -19,7 +19,7 @@ export function useVoiceRecognition() {
   const [isListening, setIsListening] = useState(false);
   const isSupported = getSpeechRecognition() !== null;
 
-  // Keep a ref to the latest pointer position for spawning objects
+  
   const pointerPosRef = useRef<Vector3Tuple>([0, 0.5, 0]);
   useEffect(() => {
     if (state.gesture.pointerPosition) {
@@ -27,13 +27,13 @@ export function useVoiceRecognition() {
     }
   }, [state.gesture.pointerPosition]);
 
-  // Keep latest selectedObjectId in a ref
+  
   const selectedIdRef = useRef<string | null>(null);
   useEffect(() => {
     selectedIdRef.current = state.selectedObjectId;
   }, [state.selectedObjectId]);
 
-  // ── Parse a transcript into a VoiceCommand ─────────────────
+  
   const parseCommand = useCallback((transcript: string): VoiceCommand | null => {
     const lower = transcript.toLowerCase().trim();
 
@@ -51,13 +51,13 @@ export function useVoiceRecognition() {
     return null;
   }, []);
 
-  // ── Execute a VoiceCommand ─────────────────────────────────
+  
   const executeCommand = useCallback(
     (cmd: VoiceCommand) => {
       switch (cmd.type) {
         case 'create': {
           const pos: Vector3Tuple = [...pointerPosRef.current];
-          // Place slightly above ground if pointer is at ground level
+          
           if (pos[1] < 0.5) pos[1] = 0.5;
           const colorHex = cmd.color ? getColorHex(cmd.color) : getRandomColor();
           addObject(cmd.shape ?? 'cube', pos, colorHex);
@@ -77,7 +77,7 @@ export function useVoiceRecognition() {
     [addObject, removeObject, clearAllObjects],
   );
 
-  // ── Start listening ────────────────────────────────────────
+  
   const startListening = useCallback(() => {
     const Ctor = getSpeechRecognition();
     if (!Ctor) {
@@ -85,7 +85,7 @@ export function useVoiceRecognition() {
       return;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const recognition = new (Ctor as any)();
     recognition.continuous = true;
     recognition.interimResults = false;
@@ -110,12 +110,12 @@ export function useVoiceRecognition() {
     };
 
     recognition.onend = () => {
-      // Auto-restart for continuous listening
+      
       if (recognitionRef.current) {
         try {
           recognition.start();
         } catch {
-          // Already started
+          
         }
       }
     };
@@ -126,23 +126,23 @@ export function useVoiceRecognition() {
     setVoice({ isListening: true, error: null });
   }, [parseCommand, executeCommand, setVoice]);
 
-  // ── Stop listening ─────────────────────────────────────────
+  
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
       const r = recognitionRef.current;
       recognitionRef.current = null;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      
       (r as any).stop?.();
     }
     setIsListening(false);
     setVoice({ isListening: false });
   }, [setVoice]);
 
-  // Cleanup on unmount
+  
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        
         (recognitionRef.current as any).stop?.();
         recognitionRef.current = null;
       }

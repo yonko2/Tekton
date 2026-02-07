@@ -1,6 +1,6 @@
 import type { ShapeType, ColorName, Vector3Tuple } from '@/types';
 
-// ── Shape configurations ─────────────────────────────────────
+
 export interface ShapeConfig {
   name: string;
   defaultScale: Vector3Tuple;
@@ -13,7 +13,7 @@ export const SHAPES: Record<ShapeType, ShapeConfig> = {
   pyramid: { name: 'Pyramid', defaultScale: [1, 1, 1] },
 };
 
-// ── Color palette ────────────────────────────────────────────
+
 export const COLORS: Record<ColorName, string> = {
   red: '#e53935',
   blue: '#1e88e5',
@@ -25,16 +25,16 @@ export const COLORS: Record<ColorName, string> = {
   gray: '#757575',
 };
 
-// ── Lookups ──────────────────────────────────────────────────
+
 export const SHAPE_TYPES: ShapeType[] = ['cube', 'sphere', 'cylinder', 'pyramid'];
 export const COLOR_NAMES: ColorName[] = ['red', 'blue', 'green', 'yellow', 'orange', 'purple', 'white', 'gray'];
 
 export const getColorHex = (name: ColorName): string => COLORS[name] ?? COLORS.blue;
 
-// ── Voice-input parsers ──────────────────────────────────────
+
 export const parseShapeType = (input: string): ShapeType | null => {
   const lower = input.toLowerCase().trim();
-  // Handle "box" as synonym for "cube"
+  
   if (lower.includes('box')) return 'cube';
   return SHAPE_TYPES.find((s) => lower.includes(s)) ?? null;
 };
@@ -45,7 +45,7 @@ export const parseColorName = (input: string): ColorName | null => {
   return COLOR_NAMES.find((c) => lower.includes(c)) ?? null;
 };
 
-// ── Randoms ──────────────────────────────────────────────────
+
 export const getRandomColor = (): string => {
   const keys = Object.keys(COLORS) as ColorName[];
   return COLORS[keys[Math.floor(Math.random() * keys.length)]];

@@ -21,10 +21,10 @@ import type {
 import { SCENE_CONFIG } from '@/types';
 import { getRandomColor } from '@/constants/shapes';
 
-// ── Helpers ──────────────────────────────────────────────────
+
 const uid = (): string => `obj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-// ── Starter objects ──────────────────────────────────────────
+
 const starterObjects: SceneObject[] = [
   {
     id: 'starter_cube',
@@ -55,7 +55,7 @@ const starterObjects: SceneObject[] = [
   },
 ];
 
-// ── Initial state ────────────────────────────────────────────
+
 const initialState: SandboxState = {
   objects: starterObjects,
   selectedObjectId: null,
@@ -97,7 +97,7 @@ const initialState: SandboxState = {
   hasPermissions: false,
 };
 
-// ── Reducer ──────────────────────────────────────────────────
+
 function reducer(state: SandboxState, action: SandboxAction): SandboxState {
   switch (action.type) {
     case 'ADD_OBJECT': {
@@ -144,7 +144,7 @@ function reducer(state: SandboxState, action: SandboxAction): SandboxState {
   }
 }
 
-// ── Context type ─────────────────────────────────────────────
+
 interface SandboxContextValue {
   state: SandboxState;
   dispatch: Dispatch<SandboxAction>;
@@ -166,7 +166,7 @@ interface SandboxContextValue {
 
 const SandboxContext = createContext<SandboxContextValue | null>(null);
 
-// ── Provider ─────────────────────────────────────────────────
+
 export function SandboxProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
@@ -234,7 +234,7 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
   );
 }
 
-// ── Hook ─────────────────────────────────────────────────────
+
 export function useSandbox(): SandboxContextValue {
   const ctx = useContext(SandboxContext);
   if (!ctx) throw new Error('useSandbox must be used within <SandboxProvider>');

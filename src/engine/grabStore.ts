@@ -33,7 +33,7 @@ export const grabState: GrabState = {
   pendingRelease: false,
 };
 
-// ── Camera zoom driven by pinch-on-empty-space ───────────────
+
 export const cameraZoomState = {
   /** Current orbit radius (modified by pinch zoom) */
   radius: 14,

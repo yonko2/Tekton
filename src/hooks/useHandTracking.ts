@@ -7,7 +7,7 @@ import {
 import type { HandData, NormalizedLandmark } from '@/types';
 import { HAND_LANDMARKS } from '@/types';
 
-// ── Connections for drawing the hand skeleton ────────────────
+
 const HAND_CONNECTIONS: [number, number][] = [
   [HAND_LANDMARKS.WRIST, HAND_LANDMARKS.THUMB_CMC],
   [HAND_LANDMARKS.THUMB_CMC, HAND_LANDMARKS.THUMB_MCP],
@@ -51,13 +51,13 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
   const [isTracking, setIsTracking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Refs that mirror state so the useCallback doesn't depend on state values
-  // (which would create a new function identity on every state change and
-  // re-trigger effects in consumers).
+  
+  
+  
   const isTrackingRef = useRef(false);
   const isLoadingRef = useRef(false);
 
-  // Clean up on unmount
+  
   useEffect(() => {
     return () => {
       cancelAnimationFrame(rafRef.current);
@@ -66,7 +66,7 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
     };
   }, []);
 
-  // ── Draw landmarks on overlay canvas ───────────────────────
+  
   const drawLandmarks = useCallback(
     (results: HandLandmarkerResult) => {
       const canvas = canvasRef.current;
@@ -80,7 +80,7 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       for (const hand of results.landmarks) {
-        // Draw connections
+        
         ctx.strokeStyle = '#00ffff';
         ctx.lineWidth = 2;
         for (const [a, b] of HAND_CONNECTIONS) {
@@ -92,7 +92,7 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
           ctx.stroke();
         }
 
-        // Draw landmarks
+        
         for (const lm of hand) {
           ctx.fillStyle = '#ff0066';
           ctx.beginPath();
@@ -104,9 +104,9 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
     [],
   );
 
-  // ── Start tracking ─────────────────────────────────────────
-  // Uses refs for the guard so the callback identity is stable and won't
-  // re-trigger consumer effects on every state change.
+  
+  
+  
   const startTracking = useCallback(async () => {
     if (isTrackingRef.current || isLoadingRef.current) return;
 
@@ -115,7 +115,7 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
     setError(null);
 
     try {
-      // Initialise MediaPipe HandLandmarker
+      
       const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm',
       );
@@ -135,13 +135,13 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
 
       landmarkerRef.current = landmarker;
 
-      // Open camera
+      
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: 640, height: 480 },
       });
       streamRef.current = stream;
 
-      // Wait for the video element to be available (it must stay mounted)
+      
       const video = videoRef.current;
       if (!video) throw new Error('Video element not mounted');
       video.srcObject = stream;
@@ -152,7 +152,7 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
       setIsTracking(true);
       setIsLoading(false);
 
-      // Detection loop
+      
       let lastTime = -1;
       const detect = () => {
         if (!video || video.readyState < 2) {
@@ -169,7 +169,7 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
 
         const results = landmarker.detectForVideo(video, now);
 
-        // Build hand data array
+        
         const hands: HandData[] = (results.landmarks ?? []).map(
           (lm: NormalizedLandmark[], i: number) => ({
             landmarks: lm,
@@ -192,9 +192,9 @@ export function useHandTracking({ onResults }: UseHandTrackingOptions) {
       isLoadingRef.current = false;
       setIsLoading(false);
     }
-  }, [drawLandmarks]); // stable deps only
+  }, [drawLandmarks]); 
 
-  // ── Stop tracking ──────────────────────────────────────────
+  
   const stopTracking = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
     streamRef.current?.getTracks().forEach((t) => t.stop());

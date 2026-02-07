@@ -6,13 +6,13 @@ import type { Vector3Tuple } from '@/types';
 
 interface PositionSample {
   position: Vector3Tuple;
-  time: number; // ms timestamp
+  time: number; 
 }
 
 const MAX_SAMPLES = 8;
-const VELOCITY_SCALE = 2.5; // amplification factor for thrown objects
-const MIN_THROW_SPEED = 1.5; // units/sec – below this the object just drops
-const MAX_THROW_SPEED = 30; // cap so objects don't fly off the scene
+const VELOCITY_SCALE = 2.5; 
+const MIN_THROW_SPEED = 1.5; 
+const MAX_THROW_SPEED = 30; 
 
 export class VelocityTracker {
   private samples: PositionSample[] = [];
@@ -31,11 +31,11 @@ export class VelocityTracker {
   getVelocity(): Vector3Tuple {
     if (this.samples.length < 2) return [0, 0, 0];
 
-    // Use only the last ~4 samples for responsiveness
+    
     const recent = this.samples.slice(-4);
     const first = recent[0];
     const last = recent[recent.length - 1];
-    const dt = (last.time - first.time) / 1000; // seconds
+    const dt = (last.time - first.time) / 1000; 
 
     if (dt < 0.001) return [0, 0, 0];
 
@@ -45,10 +45,10 @@ export class VelocityTracker {
 
     const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
 
-    // Below the threshold → just drop (no impulse)
+    
     if (speed < MIN_THROW_SPEED) return [0, 0, 0];
 
-    // Clamp to max speed
+    
     if (speed > MAX_THROW_SPEED) {
       const scale = MAX_THROW_SPEED / speed;
       return [vx * scale, vy * scale, vz * scale];
@@ -63,8 +63,8 @@ export class VelocityTracker {
   }
 }
 
-// ── Ground constraint ────────────────────────────────────────
-const GROUND_HALF = 14; // objects stay within ±GROUND_HALF on x/z
+
+const GROUND_HALF = 14; 
 
 export function constrainToGround(pos: Vector3Tuple, minY = 0.25): Vector3Tuple {
   return [

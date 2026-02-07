@@ -21,13 +21,13 @@ export function SpawnBar() {
 
   const { gesture } = state;
 
-  // Detect pinch start over a tile
+  
   useEffect(() => {
     const pinching = gesture.isPinching;
     const screen = gesture.screenPosition;
 
     if (pinching && !wasPinchingRef.current && screen) {
-      // Convert normalised screen position (0-1) to pixel coordinates
+      
       const px = screen.x * window.innerWidth;
       const py = screen.y * window.innerHeight;
 
@@ -36,7 +36,7 @@ export function SpawnBar() {
         if (!el) continue;
         const rect = el.getBoundingClientRect();
 
-        // Add generous padding around the tile for hand-gesture tolerance
+        
         const pad = 20;
         if (
           px >= rect.left - pad &&
@@ -57,7 +57,7 @@ export function SpawnBar() {
     wasPinchingRef.current = pinching;
   }, [gesture.isPinching, gesture.screenPosition, gesture.pointerPosition, addObject]);
 
-  // Compute which tile the pointer is currently hovering (for visual highlight)
+  
   let hoveredIdx = -1;
   const screen = gesture.screenPosition;
   if (screen && !gesture.isPinching) {

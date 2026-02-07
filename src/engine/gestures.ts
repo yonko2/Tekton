@@ -5,7 +5,7 @@
 import type { NormalizedLandmark, GestureType, Vector3Tuple } from '@/types';
 import { HAND_LANDMARKS } from '@/types';
 
-// ── Distances ────────────────────────────────────────────────
+
 export function distance3D(a: NormalizedLandmark, b: NormalizedLandmark): number {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
 }
@@ -14,21 +14,21 @@ export function distance2D(a: NormalizedLandmark, b: NormalizedLandmark): number
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 }
 
-// ── Pinch detection with hysteresis, smoothing & debounce ────
-//
-// PINCH_ON  : distance must drop below this to START a pinch
-// PINCH_OFF : distance must exceed this to STOP a pinch
-// The gap between the two prevents rapid toggling.
+
+
+
+
+
 const PINCH_ON = 0.06;
 const PINCH_OFF = 0.09;
 
-// Exponential-moving-average factor (0-1). Lower = smoother but laggier.
+
 const SMOOTH_FACTOR = 0.35;
 
-// How many consecutive "not pinching" frames before we actually release.
+
 const RELEASE_GRACE_FRAMES = 4;
 
-// ── Module-level pinch state (persists across calls) ─────────
+
 let smoothedDistance = 1;
 let pinchActive = false;
 let releaseCounter = 0;
@@ -43,18 +43,18 @@ export function getPinchDistance(landmarks: NormalizedLandmark[]): number {
 export function isPinching(landmarks: NormalizedLandmark[]): boolean {
   const raw = getPinchDistance(landmarks);
 
-  // Exponential moving average
+  
   smoothedDistance = smoothedDistance * (1 - SMOOTH_FACTOR) + raw * SMOOTH_FACTOR;
 
   if (!pinchActive) {
-    // Need to cross the tighter threshold to begin
+    
     if (smoothedDistance < PINCH_ON) {
       pinchActive = true;
       releaseCounter = 0;
     }
   } else {
-    // Already pinching – only release after exceeding the wider threshold
-    // for several consecutive frames (grace period).
+    
+    
     if (smoothedDistance > PINCH_OFF) {
       releaseCounter++;
       if (releaseCounter >= RELEASE_GRACE_FRAMES) {
@@ -62,7 +62,7 @@ export function isPinching(landmarks: NormalizedLandmark[]): boolean {
         releaseCounter = 0;
       }
     } else {
-      // Still within range – reset the grace counter
+      
       releaseCounter = 0;
     }
   }
@@ -77,7 +77,7 @@ export function resetPinchState(): void {
   releaseCounter = 0;
 }
 
-// ── Finger extension checks ──────────────────────────────────
+
 function isFingerExtended(
   landmarks: NormalizedLandmark[],
   _mcp: number,
@@ -126,16 +126,16 @@ export function isPinkyExtended(landmarks: NormalizedLandmark[]): boolean {
   );
 }
 
-// ── Gesture detection ────────────────────────────────────────
-// Accepts the *already-computed* pinch boolean so that isPinching()
-// is only called once per frame (it has module-level state).
+
+
+
 export function detectGesture(
   landmarks: NormalizedLandmark[],
   pinchResult: boolean,
 ): GestureType {
   if (pinchResult) return 'pinch';
 
-  // Point = index extended, others curled
+  
   const indexUp = isIndexExtended(landmarks);
   const middleUp = isMiddleExtended(landmarks);
   const ringUp = isRingExtended(landmarks);
@@ -146,10 +146,10 @@ export function detectGesture(
   return 'none';
 }
 
-// ── Hand proximity (apparent hand size as distance proxy) ────
-// Larger value = hand is closer to the camera.
+
+
 let smoothedHandScale = 0;
-const HAND_SCALE_SMOOTH = 0.2; // low = smoother
+const HAND_SCALE_SMOOTH = 0.2; 
 
 export function getHandScale(landmarks: NormalizedLandmark[]): number {
   const wrist = landmarks[HAND_LANDMARKS.WRIST];
@@ -158,28 +158,28 @@ export function getHandScale(landmarks: NormalizedLandmark[]): number {
   const pinkyMcp = landmarks[HAND_LANDMARKS.PINKY_MCP];
   const raw = (distance2D(wrist, middleMcp) + distance2D(indexMcp, pinkyMcp)) / 2;
 
-  if (smoothedHandScale === 0) smoothedHandScale = raw; // first sample
+  if (smoothedHandScale === 0) smoothedHandScale = raw; 
   smoothedHandScale = smoothedHandScale * (1 - HAND_SCALE_SMOOTH) + raw * HAND_SCALE_SMOOTH;
   return smoothedHandScale;
 }
 
-// ── Hand roll (twist) angle ──────────────────────────────────
-// Measures the 2D screen-space angle of the WRIST → MIDDLE_MCP vector.
-// This is the longest stable hand axis and rotates clearly when the
-// user twists their wrist.  Only very light EMA is applied so that
-// the signal is responsive enough to feel immediate.
+
+
+
+
+
 let smoothedRollAngle = 0;
 let rollInitialised = false;
-const ROLL_SMOOTH = 0.6; // higher = more responsive (0-1)
+const ROLL_SMOOTH = 0.6; 
 
 export function getHandRollAngle(landmarks: NormalizedLandmark[]): number {
   const wrist = landmarks[HAND_LANDMARKS.WRIST];
   const middleMcp = landmarks[HAND_LANDMARKS.MIDDLE_MCP];
 
-  // Mirror X for the webcam flip, compute angle from screen "up".
-  const dx = (1 - middleMcp.x) - (1 - wrist.x); // wrist.x − middleMcp.x
-  const dy = middleMcp.y - wrist.y;               // positive = MCP below wrist
-  const raw = Math.atan2(dx, -dy);                 // 0 when hand points up
+  
+  const dx = (1 - middleMcp.x) - (1 - wrist.x); 
+  const dy = middleMcp.y - wrist.y;               
+  const raw = Math.atan2(dx, -dy);                 
 
   if (!rollInitialised) {
     smoothedRollAngle = raw;
@@ -193,10 +193,10 @@ export function getHandRollAngle(landmarks: NormalizedLandmark[]): number {
   return smoothedRollAngle;
 }
 
-// ── Second-hand finger spread (for two-hand scale gesture) ───
-// Measures the 2D distance between THUMB_TIP and INDEX_TIP of
-// the second hand.  Has its own EMA state so it doesn't interfere
-// with the primary hand's pinch smoothing.
+
+
+
+
 let smoothedSpread = 0;
 let spreadInitialised = false;
 const SPREAD_SMOOTH = 0.4;
@@ -222,10 +222,10 @@ export function resetSpreadSmoothing(): void {
   spreadInitialised = false;
 }
 
-// ── Smoothed screen-position helpers ─────────────────────────
-// EMA smoothing eliminates per-frame landmark jitter so that the
-// object / camera stays still when the hand doesn't move.
-const POS_SMOOTH = 0.3; // 0-1, lower = smoother
+
+
+
+const POS_SMOOTH = 0.3; 
 let smoothedScreenX = -1;
 let smoothedScreenY = -1;
 
@@ -249,7 +249,7 @@ export function resetPositionSmoothing(): void {
   rollInitialised = false;
 }
 
-// ── Pointer position (normalised 0-1, mirrored for webcam) ──
+
 export function getPointerScreenPosition(
   landmarks: NormalizedLandmark[],
 ): { x: number; y: number } {
@@ -257,7 +257,7 @@ export function getPointerScreenPosition(
   return smoothScreen({ x: 1 - index.x, y: index.y });
 }
 
-// ── Pinch midpoint (between thumb tip & index tip) ──────────
+
 export function getPinchMidpoint(
   landmarks: NormalizedLandmark[],
 ): { x: number; y: number } {
@@ -269,9 +269,9 @@ export function getPinchMidpoint(
   });
 }
 
-// ── World-space projection helpers ───────────────────────────
-// These utilities convert normalised screen coords to a 3D
-// world position on a horizontal plane at y = groundY.
+
+
+
 import * as THREE from 'three';
 
 export function screenToWorld(
@@ -279,13 +279,13 @@ export function screenToWorld(
   camera: THREE.Camera,
   groundY = 0,
 ): Vector3Tuple {
-  // Convert 0-1 screen coords to NDC (-1 to 1)
+  
   const ndc = new THREE.Vector2(screenPos.x * 2 - 1, -(screenPos.y * 2 - 1));
 
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(ndc, camera);
 
-  // Intersect with horizontal plane at groundY
+  
   const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY);
   const target = new THREE.Vector3();
   raycaster.ray.intersectPlane(plane, target);

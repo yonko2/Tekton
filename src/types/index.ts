@@ -1,13 +1,9 @@
-// ── Shape types ──────────────────────────────────────────────
 export type ShapeType = 'cube' | 'sphere' | 'cylinder' | 'pyramid';
 
-// ── Predefined colors ────────────────────────────────────────
 export type ColorName = 'red' | 'blue' | 'green' | 'yellow' | 'orange' | 'purple' | 'white' | 'gray';
 
-// ── Vectors ──────────────────────────────────────────────────
 export type Vector3Tuple = [number, number, number];
 
-// ── Scene object stored in state ─────────────────────────────
 export interface SceneObject {
   id: string;
   type: ShapeType;
@@ -18,7 +14,6 @@ export interface SceneObject {
   isSelected: boolean;
 }
 
-// ── Hand tracking ────────────────────────────────────────────
 export interface NormalizedLandmark {
   x: number;
   y: number;
@@ -38,7 +33,6 @@ export interface HandTrackingState {
   primaryHand: HandData | null;
 }
 
-// ── Gestures ─────────────────────────────────────────────────
 export type GestureType = 'none' | 'point' | 'pinch';
 
 export interface GestureState {
@@ -50,7 +44,6 @@ export interface GestureState {
   confidence: number;
 }
 
-// ── Pointer ──────────────────────────────────────────────────
 export type PointerMode = 'idle' | 'hovering' | 'grabbing' | 'camera';
 
 export interface PointerState {
@@ -61,7 +54,6 @@ export interface PointerState {
   grabbedObjectId: string | null;
 }
 
-// ── Voice ────────────────────────────────────────────────────
 export interface VoiceCommand {
   type: 'create' | 'delete' | 'clear';
   shape?: ShapeType;
@@ -76,14 +68,12 @@ export interface VoiceState {
   error: string | null;
 }
 
-// ── Camera ───────────────────────────────────────────────────
 export interface CameraState {
   position: Vector3Tuple;
   target: Vector3Tuple;
   zoom: number;
 }
 
-// ── Root application state ───────────────────────────────────
 export interface SandboxState {
   objects: SceneObject[];
   selectedObjectId: string | null;
@@ -96,7 +86,6 @@ export interface SandboxState {
   hasPermissions: boolean;
 }
 
-// ── Reducer actions ──────────────────────────────────────────
 export type SandboxAction =
   | { type: 'ADD_OBJECT'; payload: Omit<SceneObject, 'id' | 'isSelected'> }
   | { type: 'REMOVE_OBJECT'; payload: string }
@@ -111,7 +100,6 @@ export type SandboxAction =
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_PERMISSIONS'; payload: boolean };
 
-// ── MediaPipe hand landmark indices ──────────────────────────
 export const HAND_LANDMARKS = {
   WRIST: 0,
   THUMB_CMC: 1,
@@ -136,7 +124,6 @@ export const HAND_LANDMARKS = {
   PINKY_TIP: 20,
 } as const;
 
-// ── Scene configuration constants ────────────────────────────
 export const SCENE_CONFIG = {
   ground: {
     size: [30, 30] as [number, number],
