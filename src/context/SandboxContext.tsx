@@ -152,6 +152,7 @@ interface SandboxContextValue {
   removeObject: (id: string) => void;
   updateObjectPosition: (id: string, position: Vector3Tuple) => void;
   updateObjectScale: (id: string, scale: Vector3Tuple) => void;
+  updateObjectRotation: (id: string, rotation: Vector3Tuple) => void;
   selectObject: (id: string | null) => void;
   clearAllObjects: () => void;
   setPointer: (p: Partial<PointerState>) => void;
@@ -189,6 +190,11 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_OBJECT', payload: { id, updates: { scale } } }),
     [],
   );
+  const updateObjectRotation = useCallback(
+    (id: string, rotation: Vector3Tuple) =>
+      dispatch({ type: 'UPDATE_OBJECT', payload: { id, updates: { rotation } } }),
+    [],
+  );
   const selectObject = useCallback((id: string | null) => dispatch({ type: 'SELECT_OBJECT', payload: id }), []);
   const clearAllObjects = useCallback(() => dispatch({ type: 'CLEAR_ALL_OBJECTS' }), []);
   const setPointer = useCallback((p: Partial<PointerState>) => dispatch({ type: 'SET_POINTER', payload: p }), []);
@@ -211,6 +217,7 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
         removeObject,
         updateObjectPosition,
         updateObjectScale,
+        updateObjectRotation,
         selectObject,
         clearAllObjects,
         setPointer,

@@ -146,13 +146,86 @@ export function detectGesture(
   return 'none';
 }
 
+// ── Hand proximity (apparent hand size as distance proxy) ────
+// Larger value = hand is closer to the camera.
+let smoothedHandScale = 0;
+const HAND_SCALE_SMOOTH = 0.2; // low = smoother
+
+export function getHandScale(landmarks: NormalizedLandmark[]): number {
+  const wrist = landmarks[HAND_LANDMARKS.WRIST];
+  const middleMcp = landmarks[HAND_LANDMARKS.MIDDLE_MCP];
+  const indexMcp = landmarks[HAND_LANDMARKS.INDEX_MCP];
+  const pinkyMcp = landmarks[HAND_LANDMARKS.PINKY_MCP];
+  const raw = (distance2D(wrist, middleMcp) + distance2D(indexMcp, pinkyMcp)) / 2;
+
+  if (smoothedHandScale === 0) smoothedHandScale = raw; // first sample
+  smoothedHandScale = smoothedHandScale * (1 - HAND_SCALE_SMOOTH) + raw * HAND_SCALE_SMOOTH;
+  return smoothedHandScale;
+}
+
+// ── Hand roll (twist) angle ──────────────────────────────────
+// Measures the 2D screen-space angle of the WRIST → MIDDLE_MCP vector.
+// This is the longest stable hand axis and rotates clearly when the
+// user twists their wrist.  Only very light EMA is applied so that
+// the signal is responsive enough to feel immediate.
+let smoothedRollAngle = 0;
+let rollInitialised = false;
+const ROLL_SMOOTH = 0.6; // higher = more responsive (0-1)
+
+export function getHandRollAngle(landmarks: NormalizedLandmark[]): number {
+  const wrist = landmarks[HAND_LANDMARKS.WRIST];
+  const middleMcp = landmarks[HAND_LANDMARKS.MIDDLE_MCP];
+
+  // Mirror X for the webcam flip, compute angle from screen "up".
+  const dx = (1 - middleMcp.x) - (1 - wrist.x); // wrist.x − middleMcp.x
+  const dy = middleMcp.y - wrist.y;               // positive = MCP below wrist
+  const raw = Math.atan2(dx, -dy);                 // 0 when hand points up
+
+  if (!rollInitialised) {
+    smoothedRollAngle = raw;
+    rollInitialised = true;
+  } else {
+    let diff = raw - smoothedRollAngle;
+    if (diff > Math.PI) diff -= 2 * Math.PI;
+    if (diff < -Math.PI) diff += 2 * Math.PI;
+    smoothedRollAngle += diff * ROLL_SMOOTH;
+  }
+  return smoothedRollAngle;
+}
+
+// ── Smoothed screen-position helpers ─────────────────────────
+// EMA smoothing eliminates per-frame landmark jitter so that the
+// object / camera stays still when the hand doesn't move.
+const POS_SMOOTH = 0.3; // 0-1, lower = smoother
+let smoothedScreenX = -1;
+let smoothedScreenY = -1;
+
+function smoothScreen(raw: { x: number; y: number }): { x: number; y: number } {
+  if (smoothedScreenX < 0) {
+    smoothedScreenX = raw.x;
+    smoothedScreenY = raw.y;
+  } else {
+    smoothedScreenX = smoothedScreenX * (1 - POS_SMOOTH) + raw.x * POS_SMOOTH;
+    smoothedScreenY = smoothedScreenY * (1 - POS_SMOOTH) + raw.y * POS_SMOOTH;
+  }
+  return { x: smoothedScreenX, y: smoothedScreenY };
+}
+
+/** Reset position, hand-scale, and roll smoothing (call when hand disappears). */
+export function resetPositionSmoothing(): void {
+  smoothedScreenX = -1;
+  smoothedScreenY = -1;
+  smoothedHandScale = 0;
+  smoothedRollAngle = 0;
+  rollInitialised = false;
+}
+
 // ── Pointer position (normalised 0-1, mirrored for webcam) ──
 export function getPointerScreenPosition(
   landmarks: NormalizedLandmark[],
 ): { x: number; y: number } {
   const index = landmarks[HAND_LANDMARKS.INDEX_TIP];
-  // Mirror x because webcam is flipped
-  return { x: 1 - index.x, y: index.y };
+  return smoothScreen({ x: 1 - index.x, y: index.y });
 }
 
 // ── Pinch midpoint (between thumb tip & index tip) ──────────
@@ -161,10 +234,10 @@ export function getPinchMidpoint(
 ): { x: number; y: number } {
   const thumb = landmarks[HAND_LANDMARKS.THUMB_TIP];
   const index = landmarks[HAND_LANDMARKS.INDEX_TIP];
-  return {
+  return smoothScreen({
     x: 1 - (thumb.x + index.x) / 2,
     y: (thumb.y + index.y) / 2,
-  };
+  });
 }
 
 // ── World-space projection helpers ───────────────────────────
@@ -190,4 +263,23 @@ export function screenToWorld(
 
   if (!target) return [0, groundY, 0];
   return [target.x, target.y, target.z];
+}
+
+/**
+ * Project screen position to a 3D point at a given distance along the
+ * camera ray. This allows objects to move freely in the camera's view
+ * plane (including vertically) instead of being locked to a ground plane.
+ */
+export function screenToWorldAtDistance(
+  screenPos: { x: number; y: number },
+  camera: THREE.Camera,
+  distance: number,
+): Vector3Tuple {
+  const ndc = new THREE.Vector2(screenPos.x * 2 - 1, -(screenPos.y * 2 - 1));
+
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(ndc, camera);
+
+  const point = raycaster.ray.at(distance, new THREE.Vector3());
+  return [point.x, point.y, point.z];
 }

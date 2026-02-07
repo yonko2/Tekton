@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { useSandbox } from '@/context/SandboxContext';
+import { cameraZoomState } from '@/engine/grabStore';
 
 export function CameraController() {
   const { state } = useSandbox();
@@ -16,7 +17,6 @@ export function CameraController() {
     }
 
     if (gestureControlling) {
-      // Snap directly -- no lerp / acceleration
       camera.position.set(
         state.camera.position[0],
         state.camera.position[1],

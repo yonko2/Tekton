@@ -69,6 +69,10 @@ export function PhysicsObject({
 
   // Track whether THIS object is currently grabbed (local to this component)
   const isGrabbed = useRef(false);
+  const wireRef = useRef<THREE.Mesh>(null);
+
+  // Quaternion captured at the moment the grab starts (live from physics body)
+  const grabStartQuat = useRef(new THREE.Quaternion());
 
   // Register rigid-body ref in the global map
   const rbRefStable = useRef<React.RefObject<RapierRigidBody | null>>(rbRef);
@@ -92,12 +96,26 @@ export function PhysicsObject({
       rb.setBodyType(2, true); // KinematicPositionBased
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+
+      // Snapshot the body's LIVE rotation from physics (not stale React state)
+      const r = rb.rotation();
+      grabStartQuat.current.set(r.x, r.y, r.z, r.w);
     }
 
-    // ── While grabbed: follow the target position ────────────
+    // ── While grabbed: follow position, rotation & live scale ─
     if (amGrabbed && isGrabbed.current) {
       const [tx, ty, tz] = grabState.targetPosition;
       rb.setNextKinematicTranslation({ x: tx, y: ty, z: tz });
+
+      // Apply twist delta around the camera's forward axis (captured at grab start).
+      // This rotates the object in the user's view plane regardless of camera angle.
+      const [ax, ay, az] = grabState.twistAxis;
+      const twistQ = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(ax, ay, az),
+        grabState.twistAngle,
+      );
+      const finalQ = twistQ.clone().multiply(grabStartQuat.current);
+      rb.setNextKinematicRotation({ x: finalQ.x, y: finalQ.y, z: finalQ.z, w: finalQ.w });
     }
 
     // ── Pending release ──────────────────────────────────────
@@ -109,6 +127,8 @@ export function PhysicsObject({
 
       // Clear the grab store
       grabState.objectId = null;
+      grabState.twistAngle = 0;
+      grabState.twistAxis = [0, 0, -1];
       grabState.pendingRelease = false;
       grabState.releaseVelocity = [0, 0, 0];
     }
@@ -160,6 +180,7 @@ export function PhysicsObject({
 
         {object.isSelected && (
           <mesh
+            ref={wireRef}
             scale={[
               object.scale[0] * 1.06,
               object.scale[1] * 1.06,

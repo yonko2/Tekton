@@ -2,8 +2,7 @@
  * Module-level store for grab state.
  *
  * The gesture hook (running in setInterval) WRITES here.
- * PhysicsObject components (running in useFrame) READ from here
- * to control their body type and position within the R3F render loop.
+ * PhysicsObject / CameraController (running in useFrame) READ from here.
  */
 import type { Vector3Tuple } from '@/types';
 
@@ -12,6 +11,10 @@ export interface GrabState {
   objectId: string | null;
   /** Target world position the grabbed object should move to */
   targetPosition: Vector3Tuple;
+  /** Twist angle (radians) applied around the view axis */
+  twistAngle: number;
+  /** Camera forward direction captured at grab start (rotation axis) */
+  twistAxis: Vector3Tuple;
   /** Throw velocity to apply on release */
   releaseVelocity: Vector3Tuple;
   /** Set to true for one frame when the object should be released */
@@ -21,6 +24,14 @@ export interface GrabState {
 export const grabState: GrabState = {
   objectId: null,
   targetPosition: [0, 0, 0],
+  twistAngle: 0,
+  twistAxis: [0, 0, -1],
   releaseVelocity: [0, 0, 0],
   pendingRelease: false,
+};
+
+// ── Camera zoom driven by pinch-on-empty-space ───────────────
+export const cameraZoomState = {
+  /** Current orbit radius (modified by pinch zoom) */
+  radius: 14,
 };
