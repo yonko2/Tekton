@@ -247,6 +247,89 @@ body,
   text-overflow: ellipsis;
 }
 
+/* ── Voice help in instructions panel ──────────────────────────── */
+.voice-help-intro {
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.75;
+  margin: 4px 0 6px;
+}
+
+.voice-help-examples {
+  font-size: 11px;
+  opacity: 0.55;
+  margin: 8px 0 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+/* ── Spawn bar (top-centre) ───────────────────────────────────── */
+.spawn-bar {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  z-index: 12;
+}
+
+.spawn-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 64px;
+  height: 64px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  user-select: none;
+}
+
+.spawn-tile:hover,
+.spawn-tile-hover {
+  transform: scale(1.1);
+  border-color: rgba(255, 255, 255, 0.25) !important;
+  box-shadow: 0 0 12px rgba(144, 202, 249, 0.35);
+}
+
+.spawn-tile:active {
+  transform: scale(0.95);
+}
+
+.spawn-tile-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.7;
+}
+
+/* ── Shape previews inside spawn tiles ────────────────────────── */
+.spawn-shape {
+  width: 26px;
+  height: 26px;
+  opacity: 0.9;
+  transition: opacity 0.15s ease;
+}
+
+.spawn-tile:hover .spawn-shape,
+.spawn-tile-hover .spawn-shape {
+  opacity: 1;
+}
+
+.spawn-shape-cube {
+  border-radius: 3px;
+}
+
+.spawn-shape-sphere {
+  border-radius: 50%;
+}
+
+.spawn-shape-cylinder {
+  border-radius: 50% / 20%;
+}
+
 /* ── Loading overlay (on top of scene, doesn't unmount children) ── */
 .loading-overlay {
   position: absolute;

@@ -4,6 +4,7 @@ import { HandVisualization } from './HandVisualization';
 import { StatusPanel } from './StatusPanel';
 import { VoiceIndicator } from './VoiceIndicator';
 import { Instructions } from './Instructions';
+import { SpawnBar } from './SpawnBar';
 
 interface OverlayProps {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -27,6 +28,8 @@ export function Overlay({
 
   return (
     <div className="overlay-container">
+      <SpawnBar />
+
       <StatusPanel
         gesture={state.gesture.currentGesture}
         objectCount={state.objects.length}
