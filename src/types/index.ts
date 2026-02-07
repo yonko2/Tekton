@@ -1,5 +1,5 @@
 // ── Shape types ──────────────────────────────────────────────
-export type ShapeType = 'cube' | 'sphere' | 'cylinder' | 'cone' | 'torus' | 'pyramid';
+export type ShapeType = 'cube' | 'sphere' | 'cylinder' | 'pyramid';
 
 // ── Predefined colors ────────────────────────────────────────
 export type ColorName = 'red' | 'blue' | 'green' | 'yellow' | 'orange' | 'purple' | 'white' | 'gray';

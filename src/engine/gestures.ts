@@ -19,8 +19,8 @@ export function distance2D(a: NormalizedLandmark, b: NormalizedLandmark): number
 // PINCH_ON  : distance must drop below this to START a pinch
 // PINCH_OFF : distance must exceed this to STOP a pinch
 // The gap between the two prevents rapid toggling.
-const PINCH_ON = 0.10;
-const PINCH_OFF = 0.14;
+const PINCH_ON = 0.06;
+const PINCH_OFF = 0.09;
 
 // Exponential-moving-average factor (0-1). Lower = smoother but laggier.
 const SMOOTH_FACTOR = 0.35;

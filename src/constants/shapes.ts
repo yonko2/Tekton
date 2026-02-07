@@ -10,8 +10,6 @@ export const SHAPES: Record<ShapeType, ShapeConfig> = {
   cube: { name: 'Cube', defaultScale: [1, 1, 1] },
   sphere: { name: 'Sphere', defaultScale: [1, 1, 1] },
   cylinder: { name: 'Cylinder', defaultScale: [1, 1, 1] },
-  cone: { name: 'Cone', defaultScale: [1, 1, 1] },
-  torus: { name: 'Torus', defaultScale: [1, 1, 1] },
   pyramid: { name: 'Pyramid', defaultScale: [1, 1, 1] },
 };
 
@@ -28,7 +26,7 @@ export const COLORS: Record<ColorName, string> = {
 };
 
 // ── Lookups ──────────────────────────────────────────────────
-export const SHAPE_TYPES: ShapeType[] = ['cube', 'sphere', 'cylinder', 'cone', 'torus', 'pyramid'];
+export const SHAPE_TYPES: ShapeType[] = ['cube', 'sphere', 'cylinder', 'pyramid'];
 export const COLOR_NAMES: ColorName[] = ['red', 'blue', 'green', 'yellow', 'orange', 'purple', 'white', 'gray'];
 
 export const getColorHex = (name: ColorName): string => COLORS[name] ?? COLORS.blue;
@@ -38,7 +36,6 @@ export const parseShapeType = (input: string): ShapeType | null => {
   const lower = input.toLowerCase().trim();
   // Handle "box" as synonym for "cube"
   if (lower.includes('box')) return 'cube';
-  if (lower.includes('ring') || lower.includes('donut')) return 'torus';
   return SHAPE_TYPES.find((s) => lower.includes(s)) ?? null;
 };
 

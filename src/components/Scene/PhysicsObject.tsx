@@ -22,10 +22,6 @@ function ShapeGeometry({ type }: { type: ShapeType }) {
       return <sphereGeometry args={[0.5, 32, 32]} />;
     case 'cylinder':
       return <cylinderGeometry args={[0.5, 0.5, 1.5, 32]} />;
-    case 'cone':
-      return <coneGeometry args={[0.5, 1, 32]} />;
-    case 'torus':
-      return <torusGeometry args={[0.4, 0.15, 16, 32]} />;
     case 'pyramid':
       return pyramidGeo ? (
         <primitive object={pyramidGeo} attach="geometry" />
