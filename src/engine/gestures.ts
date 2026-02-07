@@ -127,8 +127,13 @@ export function isPinkyExtended(landmarks: NormalizedLandmark[]): boolean {
 }
 
 // ── Gesture detection ────────────────────────────────────────
-export function detectGesture(landmarks: NormalizedLandmark[]): GestureType {
-  if (isPinching(landmarks)) return 'pinch';
+// Accepts the *already-computed* pinch boolean so that isPinching()
+// is only called once per frame (it has module-level state).
+export function detectGesture(
+  landmarks: NormalizedLandmark[],
+  pinchResult: boolean,
+): GestureType {
+  if (pinchResult) return 'pinch';
 
   // Point = index extended, others curled
   const indexUp = isIndexExtended(landmarks);

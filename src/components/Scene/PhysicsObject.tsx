@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import { RigidBody, type RapierRigidBody } from '@react-three/rapier';
 import type { SceneObject as SceneObjectType, ShapeType } from '@/types';
 import { rigidBodyRefs } from '@/hooks/useGestureRecognition';
+import { grabState } from '@/engine/grabStore';
 
-// ── Shape geometry component ─────────────────────────────────
+// ── Shape geometry ───────────────────────────────────────────
 function ShapeGeometry({ type }: { type: ShapeType }) {
   const pyramidGeo = useMemo(() => {
     if (type !== 'pyramid') return null;
@@ -36,7 +37,7 @@ function ShapeGeometry({ type }: { type: ShapeType }) {
   }
 }
 
-// ── Collider type selector ───────────────────────────────────
+// ── Collider selector ────────────────────────────────────────
 function colliderFor(type: ShapeType): 'cuboid' | 'ball' | 'hull' {
   switch (type) {
     case 'cube':
@@ -66,7 +67,10 @@ export function PhysicsObject({
   const rbRef = useRef<RapierRigidBody>(null);
   const meshRef = useRef<THREE.Mesh>(null);
 
-  // Register / unregister rigid-body ref in the global map
+  // Track whether THIS object is currently grabbed (local to this component)
+  const isGrabbed = useRef(false);
+
+  // Register rigid-body ref in the global map
   const rbRefStable = useRef<React.RefObject<RapierRigidBody | null>>(rbRef);
   useEffect(() => {
     rigidBodyRefs.set(object.id, rbRefStable.current);
@@ -75,12 +79,51 @@ export function PhysicsObject({
     };
   }, [object.id]);
 
-  // Subtle floating animation when selected
-  useFrame(({ clock }) => {
-    if (meshRef.current && object.isSelected) {
-      meshRef.current.position.y = Math.sin(clock.elapsedTime * 2) * 0.04;
-    } else if (meshRef.current) {
-      meshRef.current.position.y = 0;
+  // ── Per-frame: read grab store and drive the body ──────────
+  useFrame(() => {
+    const rb = rbRef.current;
+    if (!rb) return;
+
+    const amGrabbed = grabState.objectId === object.id;
+
+    // ── Transition: not grabbed → grabbed ────────────────────
+    if (amGrabbed && !isGrabbed.current) {
+      isGrabbed.current = true;
+      rb.setBodyType(2, true); // KinematicPositionBased
+      rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
+
+    // ── While grabbed: follow the target position ────────────
+    if (amGrabbed && isGrabbed.current) {
+      const [tx, ty, tz] = grabState.targetPosition;
+      rb.setNextKinematicTranslation({ x: tx, y: ty, z: tz });
+    }
+
+    // ── Pending release ──────────────────────────────────────
+    if (amGrabbed && grabState.pendingRelease) {
+      isGrabbed.current = false;
+      rb.setBodyType(0, true); // Dynamic
+      const [vx, vy, vz] = grabState.releaseVelocity;
+      rb.setLinvel({ x: vx, y: vy, z: vz }, true);
+
+      // Clear the grab store
+      grabState.objectId = null;
+      grabState.pendingRelease = false;
+      grabState.releaseVelocity = [0, 0, 0];
+    }
+
+    // ── Transition: was grabbed but store says someone else / nobody ──
+    if (!amGrabbed && isGrabbed.current) {
+      isGrabbed.current = false;
+      rb.setBodyType(0, true); // Dynamic
+    }
+
+    // Selection floating animation
+    if (meshRef.current) {
+      meshRef.current.position.y = object.isSelected && !isGrabbed.current
+        ? Math.sin(performance.now() / 500) * 0.04
+        : 0;
     }
   });
 
@@ -94,27 +137,16 @@ export function PhysicsObject({
       friction={0.8}
       restitution={0.2}
       mass={1}
-      userData={{ objectId: object.id }}
     >
       <group userData={{ objectId: object.id }}>
-        {/* Main mesh */}
         <mesh
           ref={meshRef}
           scale={object.scale}
           castShadow
           receiveShadow
-          onPointerOver={(e) => {
-            e.stopPropagation();
-            onPointerOver?.();
-          }}
-          onPointerOut={(e) => {
-            e.stopPropagation();
-            onPointerOut?.();
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onClick?.();
-          }}
+          onPointerOver={(e) => { e.stopPropagation(); onPointerOver?.(); }}
+          onPointerOut={(e) => { e.stopPropagation(); onPointerOut?.(); }}
+          onClick={(e) => { e.stopPropagation(); onClick?.(); }}
         >
           <ShapeGeometry type={object.type} />
           <meshStandardMaterial
@@ -126,7 +158,6 @@ export function PhysicsObject({
           />
         </mesh>
 
-        {/* Selection wireframe overlay */}
         {object.isSelected && (
           <mesh
             scale={[
