@@ -116,6 +116,14 @@ export function PhysicsObject({
       );
       const finalQ = twistQ.clone().multiply(grabStartQuat.current);
       rb.setNextKinematicRotation({ x: finalQ.x, y: finalQ.y, z: finalQ.z, w: finalQ.w });
+
+      // Apply live scale factor from two-hand gesture to the mesh visuals
+      const f = grabState.scaleFactor;
+      const sx = object.scale[0] * f;
+      const sy = object.scale[1] * f;
+      const sz = object.scale[2] * f;
+      if (meshRef.current) meshRef.current.scale.set(sx, sy, sz);
+      if (wireRef.current) wireRef.current.scale.set(sx * 1.06, sy * 1.06, sz * 1.06);
     }
 
     // ── Pending release ──────────────────────────────────────
@@ -129,6 +137,7 @@ export function PhysicsObject({
       grabState.objectId = null;
       grabState.twistAngle = 0;
       grabState.twistAxis = [0, 0, -1];
+      grabState.scaleFactor = 1;
       grabState.pendingRelease = false;
       grabState.releaseVelocity = [0, 0, 0];
     }
@@ -137,6 +146,11 @@ export function PhysicsObject({
     if (!amGrabbed && isGrabbed.current) {
       isGrabbed.current = false;
       rb.setBodyType(0, true); // Dynamic
+    }
+
+    // Reset mesh scale to the committed prop value when not grabbed
+    if (!isGrabbed.current && meshRef.current) {
+      meshRef.current.scale.set(object.scale[0], object.scale[1], object.scale[2]);
     }
 
     // Selection floating animation

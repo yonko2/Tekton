@@ -193,6 +193,35 @@ export function getHandRollAngle(landmarks: NormalizedLandmark[]): number {
   return smoothedRollAngle;
 }
 
+// ── Second-hand finger spread (for two-hand scale gesture) ───
+// Measures the 2D distance between THUMB_TIP and INDEX_TIP of
+// the second hand.  Has its own EMA state so it doesn't interfere
+// with the primary hand's pinch smoothing.
+let smoothedSpread = 0;
+let spreadInitialised = false;
+const SPREAD_SMOOTH = 0.4;
+
+/** Return the EMA-smoothed thumb-index spread distance. */
+export function getFingerSpread(landmarks: NormalizedLandmark[]): number {
+  const thumb = landmarks[HAND_LANDMARKS.THUMB_TIP];
+  const index = landmarks[HAND_LANDMARKS.INDEX_TIP];
+  const raw = distance2D(thumb, index);
+
+  if (!spreadInitialised) {
+    smoothedSpread = raw;
+    spreadInitialised = true;
+  } else {
+    smoothedSpread = smoothedSpread * (1 - SPREAD_SMOOTH) + raw * SPREAD_SMOOTH;
+  }
+  return smoothedSpread;
+}
+
+/** Reset the second-hand spread smoothing (call when second hand disappears). */
+export function resetSpreadSmoothing(): void {
+  smoothedSpread = 0;
+  spreadInitialised = false;
+}
+
 // ── Smoothed screen-position helpers ─────────────────────────
 // EMA smoothing eliminates per-frame landmark jitter so that the
 // object / camera stays still when the hand doesn't move.

@@ -15,6 +15,8 @@ export interface GrabState {
   twistAngle: number;
   /** Camera forward direction captured at grab start (rotation axis) */
   twistAxis: Vector3Tuple;
+  /** Uniform scale factor driven by the second hand's finger spread (1 = unchanged) */
+  scaleFactor: number;
   /** Throw velocity to apply on release */
   releaseVelocity: Vector3Tuple;
   /** Set to true for one frame when the object should be released */
@@ -26,6 +28,7 @@ export const grabState: GrabState = {
   targetPosition: [0, 0, 0],
   twistAngle: 0,
   twistAxis: [0, 0, -1],
+  scaleFactor: 1,
   releaseVelocity: [0, 0, 0],
   pendingRelease: false,
 };

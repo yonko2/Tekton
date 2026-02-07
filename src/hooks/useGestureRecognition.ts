@@ -7,6 +7,8 @@ import {
   getPinchMidpoint,
   getHandScale,
   getHandRollAngle,
+  getFingerSpread,
+  resetSpreadSmoothing,
   screenToWorld,
   screenToWorldAtDistance,
   isPinching,
@@ -33,6 +35,8 @@ const MAX_GRAB_DIST = 25; // farthest
 const ORBIT_DEADZONE = 0.003; // ignore tiny screen-space deltas for camera orbit
 const SCALE_DEADZONE = 0.03; // ignore tiny hand-scale ratio changes
 const TWIST_SENSITIVITY = 5.0; // multiplier for twist → rotation
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 4.0;
 
 function sphericalToCartesian(theta: number, phi: number, r: number): Vector3Tuple {
   return [
@@ -78,7 +82,7 @@ function findNearestObject(
 
 // ──────────────────────────────────────────────────────────────
 export function useGestureRecognition() {
-  const { state, setGesture, setPointer, setCamera, selectObject } = useSandbox();
+  const { state, setGesture, setPointer, setCamera, selectObject, updateObjectScale } = useSandbox();
 
   const velocityTracker = useRef(new VelocityTracker());
   const lastScreenPos = useRef<{ x: number; y: number } | null>(null);
@@ -96,6 +100,11 @@ export function useGestureRecognition() {
 
   // Twist / rotation tracking
   const initialRollAngleRef = useRef(0);
+
+  // Two-hand scale tracking
+  const initialSpreadRef = useRef(0);
+  const secondHandActiveRef = useRef(false);
+  const initialObjectScaleRef = useRef<Vector3Tuple>([1, 1, 1]);
 
   const objectIdsRef = useRef<string[]>([]);
   objectIdsRef.current = state.objects.map((o) => o.id);
@@ -171,6 +180,12 @@ export function useGestureRecognition() {
 
           initialRollAngleRef.current = rollAngle;
 
+          // Snapshot the object's current scale for two-hand scaling
+          const obj = objectsRef.current.find((o) => o.id === hit.id);
+          initialObjectScaleRef.current = obj ? [...obj.scale] : [1, 1, 1];
+          secondHandActiveRef.current = false;
+          resetSpreadSmoothing();
+
           // Store camera forward direction as the twist rotation axis.
           // This makes hand-twist rotate the object in the user's view plane.
           const fwd = new THREE.Vector3();
@@ -181,6 +196,7 @@ export function useGestureRecognition() {
           grabState.targetPosition = [hit.worldPos.x, hit.worldPos.y, hit.worldPos.z];
           grabState.twistAngle = 0;
           grabState.twistAxis = [fwd.x, fwd.y, fwd.z];
+          grabState.scaleFactor = 1;
           grabState.pendingRelease = false;
 
           selectObject(hit.id);
@@ -233,6 +249,28 @@ export function useGestureRecognition() {
           const twistDelta = rollAngle - initialRollAngleRef.current;
           grabState.twistAngle = twistDelta * TWIST_SENSITIVITY;
 
+          // ── Two-hand scale: second hand controls object size ──
+          if (hands.length >= 2) {
+            const secondHand = hands[1];
+            const spread = getFingerSpread(secondHand.landmarks);
+
+            if (!secondHandActiveRef.current) {
+              // Second hand just appeared — record baseline spread
+              initialSpreadRef.current = spread;
+              secondHandActiveRef.current = true;
+            } else {
+              // Compute scale ratio from spread change
+              const ratio = initialSpreadRef.current > 0.001
+                ? spread / initialSpreadRef.current
+                : 1;
+              grabState.scaleFactor = Math.max(MIN_SCALE, Math.min(MAX_SCALE, ratio));
+            }
+          } else if (secondHandActiveRef.current) {
+            // Second hand disappeared — lock the current scale factor
+            secondHandActiveRef.current = false;
+            resetSpreadSmoothing();
+          }
+
           setPointer({ position: safePos });
 
         } else if (modeRef.current === 'camera' && lastScreenPos.current) {
@@ -263,6 +301,14 @@ export function useGestureRecognition() {
       // ── Pinch released ──────────────────────────────────────
       if (!pinching && wasPinching.current) {
         if (modeRef.current === 'grab' && grabState.objectId) {
+          // Commit the final scale from two-hand gesture to state
+          const f = grabState.scaleFactor;
+          if (f !== 1) {
+            const [sx, sy, sz] = initialObjectScaleRef.current;
+            updateObjectScale(grabState.objectId, [sx * f, sy * f, sz * f]);
+          }
+          secondHandActiveRef.current = false;
+          resetSpreadSmoothing();
           doRelease();
         }
         modeRef.current = 'idle';
@@ -279,7 +325,7 @@ export function useGestureRecognition() {
 
       wasPinching.current = pinching;
     },
-    [setGesture, setPointer, setCamera, selectObject],
+    [setGesture, setPointer, setCamera, selectObject, updateObjectScale],
   );
 
   const doRelease = useCallback(() => {
