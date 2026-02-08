@@ -82,7 +82,7 @@ function findNearestObject(
 
 
 export function useGestureRecognition() {
-  const { state, setGesture, setPointer, setCamera, selectObject, updateObjectScale } = useSandbox();
+  const { state, setGesture, setPointer, setCamera, selectObject, updateObjectScale, updateObjectPosition } = useSandbox();
 
   const velocityTracker = useRef(new VelocityTracker());
   const lastScreenPos = useRef<{ x: number; y: number } | null>(null);
@@ -301,11 +301,11 @@ export function useGestureRecognition() {
       
       if (!pinching && wasPinching.current) {
         if (modeRef.current === 'grab' && grabState.objectId) {
-          
           const f = grabState.scaleFactor;
           if (f !== 1) {
             const [sx, sy, sz] = initialObjectScaleRef.current;
             updateObjectScale(grabState.objectId, [sx * f, sy * f, sz * f]);
+            updateObjectPosition(grabState.objectId, grabState.targetPosition);
           }
           secondHandActiveRef.current = false;
           resetSpreadSmoothing();
@@ -325,7 +325,7 @@ export function useGestureRecognition() {
 
       wasPinching.current = pinching;
     },
-    [setGesture, setPointer, setCamera, selectObject, updateObjectScale],
+    [setGesture, setPointer, setCamera, selectObject, updateObjectScale, updateObjectPosition],
   );
 
   const doRelease = useCallback(() => {

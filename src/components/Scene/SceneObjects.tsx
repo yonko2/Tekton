@@ -27,7 +27,7 @@ export function SceneObjects() {
     <>
       {state.objects.map((obj) => (
         <PhysicsObject
-          key={obj.id}
+          key={`${obj.id}_${obj.scale.join(',')}`}
           object={obj}
           onPointerOver={() => handlePointerOver(obj.id)}
           onPointerOut={handlePointerOut}

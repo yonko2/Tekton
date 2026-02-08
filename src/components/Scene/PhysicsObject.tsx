@@ -2,9 +2,16 @@ import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { RigidBody, type RapierRigidBody } from '@react-three/rapier';
-import type { SceneObject as SceneObjectType, ShapeType } from '@/types';
+import type { SceneObject as SceneObjectType, ShapeType, Vector3Tuple } from '@/types';
 import { rigidBodyRefs } from '@/hooks/useGestureRecognition';
 import { grabState } from '@/engine/grabStore';
+
+const BASE_DENSITY = 5;
+
+function computeMass(scale: Vector3Tuple): number {
+  const volume = scale[0] * scale[1] * scale[2];
+  return Math.max(0.5, volume * BASE_DENSITY);
+}
 
 
 function ShapeGeometry({ type }: { type: ShapeType }) {
@@ -147,6 +154,13 @@ export function PhysicsObject({
     
     if (!isGrabbed.current && meshRef.current) {
       meshRef.current.scale.set(object.scale[0], object.scale[1], object.scale[2]);
+      if (wireRef.current) {
+        wireRef.current.scale.set(
+          object.scale[0] * 1.06,
+          object.scale[1] * 1.06,
+          object.scale[2] * 1.06,
+        );
+      }
     }
 
     
@@ -164,9 +178,11 @@ export function PhysicsObject({
       colliders={colliderFor(object.type)}
       position={object.position}
       rotation={object.rotation}
-      friction={0.8}
-      restitution={0.2}
-      mass={1}
+      friction={1.2}
+      restitution={0.05}
+      mass={computeMass(object.scale)}
+      linearDamping={1.5}
+      angularDamping={2.0}
     >
       <group userData={{ objectId: object.id }}>
         <mesh
