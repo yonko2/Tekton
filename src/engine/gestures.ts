@@ -1,224 +1,314 @@
-import type { NormalizedLandmark } from '@mediapipe/hands';
-import type { GestureType, HandLandmarks } from '@/types';
+/**
+ * Pure gesture-detection utilities.
+ * No React / Three.js imports – operates only on landmark data.
+ */
+import type { NormalizedLandmark, GestureType, Vector3Tuple } from '@/types';
 import { HAND_LANDMARKS } from '@/types';
 
-// Calculate distance between two landmarks
-export function distance(a: NormalizedLandmark, b: NormalizedLandmark): number {
-  return Math.sqrt(
-    Math.pow(a.x - b.x, 2) +
-    Math.pow(a.y - b.y, 2) +
-    Math.pow(a.z - b.z, 2)
-  );
+
+export function distance3D(a: NormalizedLandmark, b: NormalizedLandmark): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
 }
 
-// Calculate 2D distance (ignoring z)
 export function distance2D(a: NormalizedLandmark, b: NormalizedLandmark): number {
-  return Math.sqrt(
-    Math.pow(a.x - b.x, 2) +
-    Math.pow(a.y - b.y, 2)
-  );
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 }
 
-// Check if a finger is extended by comparing joint positions
-export function isFingerExtended(
-  landmarks: NormalizedLandmark[],
-  fingerTip: number,
-  fingerPip: number,
-  _fingerMcp: number
-): boolean {
-  const tip = landmarks[fingerTip];
-  const pip = landmarks[fingerPip];
-  const wrist = landmarks[HAND_LANDMARKS.WRIST];
 
-  // Check if fingertip is further from wrist than PIP joint
-  const tipDist = distance2D(tip, wrist);
-  const pipDist = distance2D(pip, wrist);
-  
-  // Also check y-coordinate (up is negative in normalized coordinates)
-  // For fingers, tip should be above (less y) than pip when extended
-  const isAbove = tip.y < pip.y;
-  
-  return tipDist > pipDist && isAbove;
-}
 
-// Check if thumb is extended
-export function isThumbExtended(landmarks: NormalizedLandmark[]): boolean {
-  const thumbTip = landmarks[HAND_LANDMARKS.THUMB_TIP];
-  const thumbIp = landmarks[HAND_LANDMARKS.THUMB_IP];
-  const indexMcp = landmarks[HAND_LANDMARKS.INDEX_MCP];
 
-  // Thumb is extended if tip is far from index MCP
-  const distFromIndex = distance2D(thumbTip, indexMcp);
-  const ipDistFromIndex = distance2D(thumbIp, indexMcp);
-  
-  return distFromIndex > ipDistFromIndex;
-}
 
-// Get finger states (extended/curled)
-export interface FingerStates {
-  thumb: boolean;
-  index: boolean;
-  middle: boolean;
-  ring: boolean;
-  pinky: boolean;
-}
 
-export function getFingerStates(landmarks: NormalizedLandmark[]): FingerStates {
-  return {
-    thumb: isThumbExtended(landmarks),
-    index: isFingerExtended(
-      landmarks,
-      HAND_LANDMARKS.INDEX_TIP,
-      HAND_LANDMARKS.INDEX_PIP,
-      HAND_LANDMARKS.INDEX_MCP
-    ),
-    middle: isFingerExtended(
-      landmarks,
-      HAND_LANDMARKS.MIDDLE_TIP,
-      HAND_LANDMARKS.MIDDLE_PIP,
-      HAND_LANDMARKS.MIDDLE_MCP
-    ),
-    ring: isFingerExtended(
-      landmarks,
-      HAND_LANDMARKS.RING_TIP,
-      HAND_LANDMARKS.RING_PIP,
-      HAND_LANDMARKS.RING_MCP
-    ),
-    pinky: isFingerExtended(
-      landmarks,
-      HAND_LANDMARKS.PINKY_TIP,
-      HAND_LANDMARKS.PINKY_PIP,
-      HAND_LANDMARKS.PINKY_MCP
-    ),
-  };
-}
+const PINCH_ON = 0.06;
+const PINCH_OFF = 0.09;
 
-// Calculate pinch distance between thumb and index finger
+
+const SMOOTH_FACTOR = 0.35;
+
+
+const RELEASE_GRACE_FRAMES = 4;
+
+
+let smoothedDistance = 1;
+let pinchActive = false;
+let releaseCounter = 0;
+
 export function getPinchDistance(landmarks: NormalizedLandmark[]): number {
-  const thumbTip = landmarks[HAND_LANDMARKS.THUMB_TIP];
-  const indexTip = landmarks[HAND_LANDMARKS.INDEX_TIP];
-  return distance(thumbTip, indexTip);
+  const thumb = landmarks[HAND_LANDMARKS.THUMB_TIP];
+  const index = landmarks[HAND_LANDMARKS.INDEX_TIP];
+  return distance3D(thumb, index);
 }
 
-// Check if pinching (thumb and index close together)
-export function isPinching(landmarks: NormalizedLandmark[], threshold = 0.05): boolean {
-  return getPinchDistance(landmarks) < threshold;
-}
+/** Returns the smoothed pinch state. Call once per frame. */
+export function isPinching(landmarks: NormalizedLandmark[]): boolean {
+  const raw = getPinchDistance(landmarks);
 
-// Get the pointing direction from index finger
-export function getPointingDirection(landmarks: NormalizedLandmark[]): { x: number; y: number } {
-  const indexTip = landmarks[HAND_LANDMARKS.INDEX_TIP];
-  const indexMcp = landmarks[HAND_LANDMARKS.INDEX_MCP];
   
-  return {
-    x: indexTip.x - indexMcp.x,
-    y: indexTip.y - indexMcp.y,
-  };
+  smoothedDistance = smoothedDistance * (1 - SMOOTH_FACTOR) + raw * SMOOTH_FACTOR;
+
+  if (!pinchActive) {
+    
+    if (smoothedDistance < PINCH_ON) {
+      pinchActive = true;
+      releaseCounter = 0;
+    }
+  } else {
+    
+    
+    if (smoothedDistance > PINCH_OFF) {
+      releaseCounter++;
+      if (releaseCounter >= RELEASE_GRACE_FRAMES) {
+        pinchActive = false;
+        releaseCounter = 0;
+      }
+    } else {
+      
+      releaseCounter = 0;
+    }
+  }
+
+  return pinchActive;
 }
 
-// Get hand size (wrist to middle fingertip distance) as proxy for camera distance
-export function getHandSize(landmarks: NormalizedLandmark[]): number {
+/** Reset pinch state (e.g. when hand disappears). */
+export function resetPinchState(): void {
+  smoothedDistance = 1;
+  pinchActive = false;
+  releaseCounter = 0;
+}
+
+
+function isFingerExtended(
+  landmarks: NormalizedLandmark[],
+  _mcp: number,
+  pip: number,
+  tip: number,
+): boolean {
   const wrist = landmarks[HAND_LANDMARKS.WRIST];
-  const middleTip = landmarks[HAND_LANDMARKS.MIDDLE_TIP];
-  return distance2D(wrist, middleTip);
+  const tipDist = distance2D(landmarks[tip], wrist);
+  const pipDist = distance2D(landmarks[pip], wrist);
+  return tipDist > pipDist;
 }
 
-// Get the center of the palm
-export function getPalmCenter(landmarks: NormalizedLandmark[]): NormalizedLandmark {
-  const palmLandmarks = [
-    landmarks[HAND_LANDMARKS.WRIST],
-    landmarks[HAND_LANDMARKS.INDEX_MCP],
-    landmarks[HAND_LANDMARKS.MIDDLE_MCP],
-    landmarks[HAND_LANDMARKS.RING_MCP],
-    landmarks[HAND_LANDMARKS.PINKY_MCP],
-  ];
-
-  const center = palmLandmarks.reduce(
-    (acc, l) => ({
-      x: acc.x + l.x / palmLandmarks.length,
-      y: acc.y + l.y / palmLandmarks.length,
-      z: acc.z + l.z / palmLandmarks.length,
-    }),
-    { x: 0, y: 0, z: 0 }
+export function isIndexExtended(landmarks: NormalizedLandmark[]): boolean {
+  return isFingerExtended(
+    landmarks,
+    HAND_LANDMARKS.INDEX_MCP,
+    HAND_LANDMARKS.INDEX_PIP,
+    HAND_LANDMARKS.INDEX_TIP,
   );
-
-  return center as NormalizedLandmark;
 }
 
-// Detect gesture from landmarks
-export function detectGesture(landmarks: NormalizedLandmark[]): GestureType {
-  const fingers = getFingerStates(landmarks);
-  const pinching = isPinching(landmarks);
+export function isMiddleExtended(landmarks: NormalizedLandmark[]): boolean {
+  return isFingerExtended(
+    landmarks,
+    HAND_LANDMARKS.MIDDLE_MCP,
+    HAND_LANDMARKS.MIDDLE_PIP,
+    HAND_LANDMARKS.MIDDLE_TIP,
+  );
+}
 
-  // Pinch gesture (thumb and index close together)
-  if (pinching) {
-    return 'pinch';
-  }
+export function isRingExtended(landmarks: NormalizedLandmark[]): boolean {
+  return isFingerExtended(
+    landmarks,
+    HAND_LANDMARKS.RING_MCP,
+    HAND_LANDMARKS.RING_PIP,
+    HAND_LANDMARKS.RING_TIP,
+  );
+}
 
-  // Pointing gesture (only index extended)
-  if (fingers.index && !fingers.middle && !fingers.ring && !fingers.pinky) {
-    return 'point';
-  }
+export function isPinkyExtended(landmarks: NormalizedLandmark[]): boolean {
+  return isFingerExtended(
+    landmarks,
+    HAND_LANDMARKS.PINKY_MCP,
+    HAND_LANDMARKS.PINKY_PIP,
+    HAND_LANDMARKS.PINKY_TIP,
+  );
+}
+
+
+
+
+export function detectGesture(
+  landmarks: NormalizedLandmark[],
+  pinchResult: boolean,
+): GestureType {
+  if (pinchResult) return 'pinch';
+
+  
+  const indexUp = isIndexExtended(landmarks);
+  const middleUp = isMiddleExtended(landmarks);
+  const ringUp = isRingExtended(landmarks);
+  const pinkyUp = isPinkyExtended(landmarks);
+
+  if (indexUp && !middleUp && !ringUp && !pinkyUp) return 'point';
 
   return 'none';
 }
 
-// Get pointer position from index fingertip (normalized 0-1)
-export function getPointerPosition(landmarks: NormalizedLandmark[]): { x: number; y: number } {
-  const indexTip = landmarks[HAND_LANDMARKS.INDEX_TIP];
-  return {
-    x: indexTip.x,
-    y: indexTip.y,
-  };
+
+
+let smoothedHandScale = 0;
+const HAND_SCALE_SMOOTH = 0.2; 
+
+export function getHandScale(landmarks: NormalizedLandmark[]): number {
+  const wrist = landmarks[HAND_LANDMARKS.WRIST];
+  const middleMcp = landmarks[HAND_LANDMARKS.MIDDLE_MCP];
+  const indexMcp = landmarks[HAND_LANDMARKS.INDEX_MCP];
+  const pinkyMcp = landmarks[HAND_LANDMARKS.PINKY_MCP];
+  const raw = (distance2D(wrist, middleMcp) + distance2D(indexMcp, pinkyMcp)) / 2;
+
+  if (smoothedHandScale === 0) smoothedHandScale = raw; 
+  smoothedHandScale = smoothedHandScale * (1 - HAND_SCALE_SMOOTH) + raw * HAND_SCALE_SMOOTH;
+  return smoothedHandScale;
 }
 
-// Get grab position from pinch center
-export function getGrabPosition(landmarks: NormalizedLandmark[]): { x: number; y: number; z: number } {
-  const thumbTip = landmarks[HAND_LANDMARKS.THUMB_TIP];
-  const indexTip = landmarks[HAND_LANDMARKS.INDEX_TIP];
+
+
+
+
+
+let smoothedRollAngle = 0;
+let rollInitialised = false;
+const ROLL_SMOOTH = 0.6; 
+
+export function getHandRollAngle(landmarks: NormalizedLandmark[]): number {
+  const wrist = landmarks[HAND_LANDMARKS.WRIST];
+  const middleMcp = landmarks[HAND_LANDMARKS.MIDDLE_MCP];
+
   
-  return {
-    x: (thumbTip.x + indexTip.x) / 2,
-    y: (thumbTip.y + indexTip.y) / 2,
-    z: (thumbTip.z + indexTip.z) / 2,
-  };
+  const dx = (1 - middleMcp.x) - (1 - wrist.x); 
+  const dy = middleMcp.y - wrist.y;               
+  const raw = Math.atan2(dx, -dy);                 
+
+  if (!rollInitialised) {
+    smoothedRollAngle = raw;
+    rollInitialised = true;
+  } else {
+    let diff = raw - smoothedRollAngle;
+    if (diff > Math.PI) diff -= 2 * Math.PI;
+    if (diff < -Math.PI) diff += 2 * Math.PI;
+    smoothedRollAngle += diff * ROLL_SMOOTH;
+  }
+  return smoothedRollAngle;
 }
 
-// Process hand results and return gesture state
-export interface GestureResult {
-  gesture: GestureType;
-  pinchDistance: number;
-  isPinching: boolean;
-  pointerPosition: { x: number; y: number } | null;
-  grabPosition: { x: number; y: number; z: number } | null;
-  fingerStates: FingerStates;
+
+
+
+
+let smoothedSpread = 0;
+let spreadInitialised = false;
+const SPREAD_SMOOTH = 0.4;
+
+/** Return the EMA-smoothed thumb-index spread distance. */
+export function getFingerSpread(landmarks: NormalizedLandmark[]): number {
+  const thumb = landmarks[HAND_LANDMARKS.THUMB_TIP];
+  const index = landmarks[HAND_LANDMARKS.INDEX_TIP];
+  const raw = distance2D(thumb, index);
+
+  if (!spreadInitialised) {
+    smoothedSpread = raw;
+    spreadInitialised = true;
+  } else {
+    smoothedSpread = smoothedSpread * (1 - SPREAD_SMOOTH) + raw * SPREAD_SMOOTH;
+  }
+  return smoothedSpread;
 }
 
-export function processHandGesture(hand: HandLandmarks): GestureResult {
-  const { landmarks } = hand;
-  const gesture = detectGesture(landmarks);
-  const pinchDist = getPinchDistance(landmarks);
-  const pinching = isPinching(landmarks);
-  const fingerStates = getFingerStates(landmarks);
+/** Reset the second-hand spread smoothing (call when second hand disappears). */
+export function resetSpreadSmoothing(): void {
+  smoothedSpread = 0;
+  spreadInitialised = false;
+}
 
-  // Get pointer position for pointing gestures
-  let pointerPosition: { x: number; y: number } | null = null;
-  if (gesture === 'point' || gesture === 'pinch') {
-    pointerPosition = getPointerPosition(landmarks);
+
+
+
+const POS_SMOOTH = 0.3; 
+let smoothedScreenX = -1;
+let smoothedScreenY = -1;
+
+function smoothScreen(raw: { x: number; y: number }): { x: number; y: number } {
+  if (smoothedScreenX < 0) {
+    smoothedScreenX = raw.x;
+    smoothedScreenY = raw.y;
+  } else {
+    smoothedScreenX = smoothedScreenX * (1 - POS_SMOOTH) + raw.x * POS_SMOOTH;
+    smoothedScreenY = smoothedScreenY * (1 - POS_SMOOTH) + raw.y * POS_SMOOTH;
   }
+  return { x: smoothedScreenX, y: smoothedScreenY };
+}
 
-  // Get grab position for pinch gestures
-  let grabPosition: { x: number; y: number; z: number } | null = null;
-  if (pinching) {
-    grabPosition = getGrabPosition(landmarks);
-  }
+/** Reset position, hand-scale, and roll smoothing (call when hand disappears). */
+export function resetPositionSmoothing(): void {
+  smoothedScreenX = -1;
+  smoothedScreenY = -1;
+  smoothedHandScale = 0;
+  smoothedRollAngle = 0;
+  rollInitialised = false;
+}
 
-  return {
-    gesture,
-    pinchDistance: pinchDist,
-    isPinching: pinching,
-    pointerPosition,
-    grabPosition,
-    fingerStates,
-  };
+
+export function getPointerScreenPosition(
+  landmarks: NormalizedLandmark[],
+): { x: number; y: number } {
+  const index = landmarks[HAND_LANDMARKS.INDEX_TIP];
+  return smoothScreen({ x: 1 - index.x, y: index.y });
+}
+
+
+export function getPinchMidpoint(
+  landmarks: NormalizedLandmark[],
+): { x: number; y: number } {
+  const thumb = landmarks[HAND_LANDMARKS.THUMB_TIP];
+  const index = landmarks[HAND_LANDMARKS.INDEX_TIP];
+  return smoothScreen({
+    x: 1 - (thumb.x + index.x) / 2,
+    y: (thumb.y + index.y) / 2,
+  });
+}
+
+
+
+
+import * as THREE from 'three';
+
+export function screenToWorld(
+  screenPos: { x: number; y: number },
+  camera: THREE.Camera,
+  groundY = 0,
+): Vector3Tuple {
+  
+  const ndc = new THREE.Vector2(screenPos.x * 2 - 1, -(screenPos.y * 2 - 1));
+
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(ndc, camera);
+
+  
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY);
+  const target = new THREE.Vector3();
+  raycaster.ray.intersectPlane(plane, target);
+
+  if (!target) return [0, groundY, 0];
+  return [target.x, target.y, target.z];
+}
+
+/**
+ * Project screen position to a 3D point at a given distance along the
+ * camera ray. This allows objects to move freely in the camera's view
+ * plane (including vertically) instead of being locked to a ground plane.
+ */
+export function screenToWorldAtDistance(
+  screenPos: { x: number; y: number },
+  camera: THREE.Camera,
+  distance: number,
+): Vector3Tuple {
+  const ndc = new THREE.Vector2(screenPos.x * 2 - 1, -(screenPos.y * 2 - 1));
+
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(ndc, camera);
+
+  const point = raycaster.ray.at(distance, new THREE.Vector3());
+  return [point.x, point.y, point.z];
 }

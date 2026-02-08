@@ -1,203 +1,75 @@
-import type { SceneObject, Vector3Tuple } from '@/types';
-import { getObjectYOffset } from './objectFactory';
+/**
+ * Velocity tracker for throw mechanics.
+ * Records recent positions and computes a release velocity vector.
+ */
+import type { Vector3Tuple } from '@/types';
 
-// Calculate bounding box for an object
-export interface BoundingBox {
-  min: Vector3Tuple;
-  max: Vector3Tuple;
+interface PositionSample {
+  position: Vector3Tuple;
+  time: number; 
 }
 
-export function getObjectBoundingBox(object: SceneObject): BoundingBox {
-  const [px, py, pz] = object.position;
-  const [sx, sy, sz] = object.scale;
-  
-  // Approximate bounding box based on shape type
-  let halfWidth: number, halfHeight: number, halfDepth: number;
-  
-  switch (object.type) {
-    case 'sphere':
-      halfWidth = halfHeight = halfDepth = 0.5 * Math.max(sx, sy, sz);
-      break;
-    case 'cylinder':
-      halfWidth = halfDepth = 0.5 * sx;
-      halfHeight = sy;
-      break;
-    case 'cone':
-      halfWidth = halfDepth = 0.5 * sx;
-      halfHeight = 0.5 * sy;
-      break;
-    case 'torus':
-      halfWidth = halfDepth = 0.55 * sx;
-      halfHeight = 0.2 * sy;
-      break;
-    case 'pyramid':
-    case 'cube':
-    default:
-      halfWidth = 0.5 * sx;
-      halfHeight = 0.5 * sy;
-      halfDepth = 0.5 * sz;
-  }
-  
-  return {
-    min: [px - halfWidth, py - halfHeight, pz - halfDepth],
-    max: [px + halfWidth, py + halfHeight, pz + halfDepth],
-  };
-}
+const MAX_SAMPLES = 8;
+const VELOCITY_SCALE = 2.5; 
+const MIN_THROW_SPEED = 1.5; 
+const MAX_THROW_SPEED = 30; 
 
-// Check if two bounding boxes intersect
-export function boxesIntersect(a: BoundingBox, b: BoundingBox): boolean {
-  return (
-    a.min[0] <= b.max[0] && a.max[0] >= b.min[0] &&
-    a.min[1] <= b.max[1] && a.max[1] >= b.min[1] &&
-    a.min[2] <= b.max[2] && a.max[2] >= b.min[2]
-  );
-}
+export class VelocityTracker {
+  private samples: PositionSample[] = [];
 
-// Check if point is inside bounding box
-export function pointInBox(point: Vector3Tuple, box: BoundingBox): boolean {
-  return (
-    point[0] >= box.min[0] && point[0] <= box.max[0] &&
-    point[1] >= box.min[1] && point[1] <= box.max[1] &&
-    point[2] >= box.min[2] && point[2] <= box.max[2]
-  );
-}
-
-// Find objects below a given position (for stacking)
-export function findObjectsBelow(
-  position: Vector3Tuple,
-  objects: SceneObject[],
-  excludeId?: string
-): SceneObject[] {
-  const [x, y, z] = position;
-  
-  return objects
-    .filter(obj => {
-      if (obj.id === excludeId) return false;
-      
-      const box = getObjectBoundingBox(obj);
-      
-      // Check if position is above this object's XZ footprint
-      const isAboveXZ = x >= box.min[0] && x <= box.max[0] &&
-                        z >= box.min[2] && z <= box.max[2];
-      
-      // Check if position is above this object's top
-      const isAboveY = y > box.max[1];
-      
-      return isAboveXZ && isAboveY;
-    })
-    .sort((a, b) => {
-      // Sort by top Y position (highest first)
-      const aTop = getObjectBoundingBox(a).max[1];
-      const bTop = getObjectBoundingBox(b).max[1];
-      return bTop - aTop;
-    });
-}
-
-// Calculate the resting position when dropping an object
-export function calculateRestingPosition(
-  droppedPosition: Vector3Tuple,
-  droppedObject: SceneObject,
-  otherObjects: SceneObject[]
-): Vector3Tuple {
-  const [x, _, z] = droppedPosition;
-  
-  // Find objects below the drop position
-  const objectsBelow = findObjectsBelow(droppedPosition, otherObjects, droppedObject.id);
-  
-  // Get the Y offset for the dropped object (height from center to bottom)
-  const yOffset = getObjectYOffset(droppedObject.type, droppedObject.scale);
-  
-  if (objectsBelow.length > 0) {
-    // Stack on top of the highest object below
-    const topObject = objectsBelow[0];
-    const topBox = getObjectBoundingBox(topObject);
-    const restY = topBox.max[1] + yOffset;
-    
-    return [x, restY, z];
-  }
-  
-  // Rest on the ground
-  return [x, yOffset, z];
-}
-
-// Check for collision between a moving object and other objects
-export function checkCollision(
-  movingObject: SceneObject,
-  newPosition: Vector3Tuple,
-  otherObjects: SceneObject[]
-): { collides: boolean; adjustedPosition: Vector3Tuple } {
-  let adjustedPos: Vector3Tuple = [...newPosition];
-  let hasCollision = false;
-  
-  const movingYOffset = getObjectYOffset(movingObject.type, movingObject.scale);
-  
-  for (const other of otherObjects) {
-    if (other.id === movingObject.id) continue;
-    
-    const testObject: SceneObject = {
-      ...movingObject,
-      position: adjustedPos,
-    };
-    
-    const testBox = getObjectBoundingBox(testObject);
-    const otherBox = getObjectBoundingBox(other);
-    
-    if (boxesIntersect(testBox, otherBox)) {
-      hasCollision = true;
-      
-      // Calculate overlap in each axis
-      const overlapX = Math.min(testBox.max[0] - otherBox.min[0], otherBox.max[0] - testBox.min[0]);
-      const overlapY = Math.min(testBox.max[1] - otherBox.min[1], otherBox.max[1] - testBox.min[1]);
-      const overlapZ = Math.min(testBox.max[2] - otherBox.min[2], otherBox.max[2] - testBox.min[2]);
-      
-      // Push out along the axis with smallest overlap
-      if (overlapY <= overlapX && overlapY <= overlapZ) {
-        // Push up (most common for stacking)
-        adjustedPos[1] = otherBox.max[1] + movingYOffset;
-      } else if (overlapX <= overlapZ) {
-        // Push along X
-        if (adjustedPos[0] > other.position[0]) {
-          adjustedPos[0] = otherBox.max[0] + (testBox.max[0] - testBox.min[0]) / 2 + 0.01;
-        } else {
-          adjustedPos[0] = otherBox.min[0] - (testBox.max[0] - testBox.min[0]) / 2 - 0.01;
-        }
-      } else {
-        // Push along Z
-        if (adjustedPos[2] > other.position[2]) {
-          adjustedPos[2] = otherBox.max[2] + (testBox.max[2] - testBox.min[2]) / 2 + 0.01;
-        } else {
-          adjustedPos[2] = otherBox.min[2] - (testBox.max[2] - testBox.min[2]) / 2 - 0.01;
-        }
-      }
+  /** Record a position sample at the current time. */
+  record(position: Vector3Tuple): void {
+    this.samples.push({ position, time: performance.now() });
+    if (this.samples.length > MAX_SAMPLES) {
+      this.samples.shift();
     }
   }
-  
-  return {
-    collides: hasCollision,
-    adjustedPosition: adjustedPos,
-  };
+
+  /** Compute average velocity (units/sec) from recent samples.
+   *  Returns [0,0,0] if the speed is below MIN_THROW_SPEED so that
+   *  releasing a stationary object simply drops it under gravity. */
+  getVelocity(): Vector3Tuple {
+    if (this.samples.length < 2) return [0, 0, 0];
+
+    
+    const recent = this.samples.slice(-4);
+    const first = recent[0];
+    const last = recent[recent.length - 1];
+    const dt = (last.time - first.time) / 1000; 
+
+    if (dt < 0.001) return [0, 0, 0];
+
+    const vx = ((last.position[0] - first.position[0]) / dt) * VELOCITY_SCALE;
+    const vy = ((last.position[1] - first.position[1]) / dt) * VELOCITY_SCALE;
+    const vz = ((last.position[2] - first.position[2]) / dt) * VELOCITY_SCALE;
+
+    const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+
+    
+    if (speed < MIN_THROW_SPEED) return [0, 0, 0];
+
+    
+    if (speed > MAX_THROW_SPEED) {
+      const scale = MAX_THROW_SPEED / speed;
+      return [vx * scale, vy * scale, vz * scale];
+    }
+
+    return [vx, vy, vz];
+  }
+
+  /** Reset the sample buffer. */
+  reset(): void {
+    this.samples = [];
+  }
 }
 
-// Constrain position to ground plane bounds
-export function constrainToGround(
-  position: Vector3Tuple,
-  groundSize: [number, number] = [20, 20]
-): Vector3Tuple {
-  const halfWidth = groundSize[0] / 2;
-  const halfDepth = groundSize[1] / 2;
-  
-  return [
-    Math.max(-halfWidth, Math.min(halfWidth, position[0])),
-    Math.max(0, position[1]), // Don't go below ground
-    Math.max(-halfDepth, Math.min(halfDepth, position[2])),
-  ];
-}
 
-// Snap to grid (optional helper)
-export function snapToGrid(position: Vector3Tuple, gridSize: number = 0.5): Vector3Tuple {
+const GROUND_HALF = 14; 
+
+export function constrainToGround(pos: Vector3Tuple, minY = 0.25): Vector3Tuple {
   return [
-    Math.round(position[0] / gridSize) * gridSize,
-    position[1],
-    Math.round(position[2] / gridSize) * gridSize,
+    Math.max(-GROUND_HALF, Math.min(GROUND_HALF, pos[0])),
+    Math.max(minY, pos[1]),
+    Math.max(-GROUND_HALF, Math.min(GROUND_HALF, pos[2])),
   ];
 }

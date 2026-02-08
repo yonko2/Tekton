@@ -1,265 +1,338 @@
-import { useCallback, useRef } from 'react';
+import { useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useSandbox } from '@/context/SandboxContext';
-import type { HandLandmarks, Vector3Tuple, GestureType } from '@/types';
-import { processHandGesture, getPointerPosition, getHandSize } from '@/engine/gestures';
+import {
+  detectGesture,
+  getPointerScreenPosition,
+  getPinchMidpoint,
+  getHandScale,
+  getHandRollAngle,
+  getFingerSpread,
+  resetSpreadSmoothing,
+  screenToWorld,
+  screenToWorldAtDistance,
+  isPinching,
+  resetPinchState,
+  resetPositionSmoothing,
+} from '@/engine/gestures';
+import { VelocityTracker, constrainToGround } from '@/engine/physics';
+import { grabState, cameraZoomState } from '@/engine/grabStore';
+import type { HandData, Vector3Tuple, GestureType } from '@/types';
+import type { RapierRigidBody } from '@react-three/rapier';
 
-interface GestureCallbacks {
-  onGrab?: (objectId: string, position: Vector3Tuple) => void;
-  onRelease?: (objectId: string, position: Vector3Tuple) => void;
-  onMove?: (objectId: string, position: Vector3Tuple) => void;
-  onScale?: (objectId: string, scale: number) => void;
-  onSelect?: (objectId: string | null) => void;
+export const rigidBodyRefs = new Map<string, React.RefObject<RapierRigidBody | null>>();
+
+
+let orbitTheta = 0;
+let orbitPhi = Math.PI / 4;
+const ORBIT_SENSITIVITY = 3;
+const MIN_ZOOM = 5;
+const MAX_ZOOM = 30;
+const ZOOM_SENSITIVITY = 1.4; 
+const DEPTH_SENSITIVITY = 1.2; 
+const MIN_GRAB_DIST = 2; 
+const MAX_GRAB_DIST = 25; 
+const ORBIT_DEADZONE = 0.003; 
+const SCALE_DEADZONE = 0.03; 
+const TWIST_SENSITIVITY = 5.0; 
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 4.0;
+
+function sphericalToCartesian(theta: number, phi: number, r: number): Vector3Tuple {
+  return [
+    r * Math.sin(phi) * Math.sin(theta),
+    r * Math.cos(phi),
+    r * Math.sin(phi) * Math.cos(theta),
+  ];
 }
 
-export function useGestureRecognition(callbacks?: GestureCallbacks) {
-  const { state, setGesture, setPointer, selectObject, setCamera } = useSandbox();
-  const lastGestureRef = useRef<GestureType>('none');
-  const lastPinchStateRef = useRef(false);
-  const initialPinchDistRef = useRef(0);
-  const initialScreenPosRef = useRef<{ x: number; y: number } | null>(null);
-  const initialHandSizeRef = useRef(0);
-  const initialScaleRef = useRef<Vector3Tuple>([1, 1, 1]);
-  const initialCameraRadiusRef = useRef(0);
-  const initialCameraAngleRef = useRef(0);
-  const smoothedDeltaXRef = useRef(0);
-  const smoothedHandSizeRatioRef = useRef(1);
-  const raycasterRef = useRef(new THREE.Raycaster());
-  const planeRef = useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
+
+const GRAB_SCREEN_RADIUS = 0.12;
+
+function findNearestObject(
+  screenPos: { x: number; y: number },
+  camera: THREE.Camera,
+  objectIds: string[],
+): { id: string; worldPos: THREE.Vector3 } | null {
+  let bestId: string | null = null;
+  let bestDist = GRAB_SCREEN_RADIUS;
+  let bestWorld = new THREE.Vector3();
+  const projected = new THREE.Vector3();
+
+  for (const id of objectIds) {
+    const rbRef = rigidBodyRefs.get(id);
+    if (!rbRef?.current) continue;
+
+    const t = rbRef.current.translation();
+    projected.set(t.x, t.y, t.z).project(camera);
+
+    const sx = (projected.x + 1) / 2;
+    const sy = (1 - projected.y) / 2;
+    const dist = Math.hypot(sx - screenPos.x, sy - screenPos.y);
+
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestId = id;
+      bestWorld = new THREE.Vector3(t.x, t.y, t.z);
+    }
+  }
+
+  return bestId ? { id: bestId, worldPos: bestWorld } : null;
+}
+
+
+export function useGestureRecognition() {
+  const { state, setGesture, setPointer, setCamera, selectObject, updateObjectScale, updateObjectPosition } = useSandbox();
+
+  const velocityTracker = useRef(new VelocityTracker());
+  const lastScreenPos = useRef<{ x: number; y: number } | null>(null);
+  const grabOffsetRef = useRef<Vector3Tuple>([0, 0, 0]);
+  const wasPinching = useRef(false);
+  const modeRef = useRef<'idle' | 'grab' | 'camera'>('idle');
+
   
-  // Keep state in refs to avoid stale closures
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const initialHandScaleRef = useRef(0);
+  const initialZoomRadiusRef = useRef(cameraZoomState.radius);
+
   
-  const callbacksRef = useRef(callbacks);
-  callbacksRef.current = callbacks;
+  const grabCameraDistRef = useRef(0);
+  const initialGrabDistRef = useRef(0);
 
-  // Convert screen coordinates to 3D world position
-  const screenToWorld = useCallback((
-    screenX: number,
-    screenY: number,
-    camera: THREE.Camera,
-    targetY: number = 0
-  ): Vector3Tuple => {
-    // Convert normalized coordinates (0-1) to NDC (-1 to 1)
-    // Note: screenX is mirrored because webcam is mirrored
-    const ndcX = (1 - screenX) * 2 - 1;
-    const ndcY = -(screenY * 2 - 1);
+  
+  const initialRollAngleRef = useRef(0);
 
-    // Create ray from camera
-    raycasterRef.current.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+  
+  const initialSpreadRef = useRef(0);
+  const secondHandActiveRef = useRef(false);
+  const initialObjectScaleRef = useRef<Vector3Tuple>([1, 1, 1]);
 
-    // Set plane at target Y height
-    planeRef.current.set(new THREE.Vector3(0, 1, 0), -targetY);
+  const objectIdsRef = useRef<string[]>([]);
+  objectIdsRef.current = state.objects.map((o) => o.id);
 
-    // Find intersection with horizontal plane
-    const intersection = new THREE.Vector3();
-    raycasterRef.current.ray.intersectPlane(planeRef.current, intersection);
+  
+  const objectsRef = useRef(state.objects);
+  objectsRef.current = state.objects;
 
-    if (intersection) {
-      return [intersection.x, targetY, intersection.z];
-    }
-
-    // Fallback: project forward from camera
-    const direction = raycasterRef.current.ray.direction.clone();
-    const origin = raycasterRef.current.ray.origin.clone();
-    const t = (targetY - origin.y) / direction.y;
-    
-    return [
-      origin.x + direction.x * t,
-      targetY,
-      origin.z + direction.z * t,
-    ];
-  }, []);
-
-  // Find object near pointer position (proximity-based detection)
-  const findNearestObject = useCallback((
-    pointerPos: Vector3Tuple,
-    objects: typeof state.objects,
-    threshold: number = 1.5
-  ): string | null => {
-    let nearestId: string | null = null;
-    let nearestDist = threshold;
-
-    for (const obj of objects) {
-      const dx = pointerPos[0] - obj.position[0];
-      const dy = pointerPos[1] - obj.position[1];
-      const dz = pointerPos[2] - obj.position[2];
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearestId = obj.id;
-      }
-    }
-
-    return nearestId;
-  }, []);
-
-  // Process hand tracking results
-  const processHands = useCallback((
-    hands: HandLandmarks[],
-    camera: THREE.Camera
-  ) => {
-    if (hands.length === 0) {
-      // No hands detected
-      setGesture({
-        currentGesture: 'none',
-        isPinching: false,
-        pointerPosition: null,
-        screenPosition: null,
-        confidence: 0,
-      });
-      setPointer({ visible: false, hoveredObjectId: null });
-      lastGestureRef.current = 'none';
-      lastPinchStateRef.current = false;
-      return;
-    }
-
-    // Use the first (primary) hand
-    const primaryHand = hands[0];
-    const result = processHandGesture(primaryHand);
-
-    // Get current state from ref (avoids stale closures)
-    const currentState = stateRef.current;
-    const currentCallbacks = callbacksRef.current;
-
-    // Get screen position from index finger tip
-    const screenPos = result.pointerPosition || getPointerPosition(primaryHand.landmarks);
-    
-    // Calculate 3D world position
-    const targetY = currentState.pointer.grabbedObjectId 
-      ? currentState.objects.find(o => o.id === currentState.pointer.grabbedObjectId)?.position[1] || 0.5
-      : 0.5;
-    
-    const worldPosition = screenToWorld(screenPos.x, screenPos.y, camera, targetY);
-
-    // Update gesture state
-    setGesture({
-      currentGesture: result.gesture,
-      pinchDistance: result.pinchDistance,
-      isPinching: result.isPinching,
-      pointerPosition: worldPosition,
-      screenPosition: screenPos,
-      confidence: 1,
-    });
-
-    // Find nearest object to pointer (proximity-based hover detection)
-    const nearestObjectId = currentState.pointer.grabbedObjectId 
-      ? currentState.pointer.grabbedObjectId  // Keep grabbed object
-      : findNearestObject(worldPosition, currentState.objects);
-
-    // Update pointer visibility - always show when hand detected
-    const pointerMode = result.isPinching 
-      ? 'grabbing' 
-      : (nearestObjectId ? 'hovering' : 'idle');
-    
-    setPointer({
-      visible: true,
-      position: worldPosition,
-      mode: pointerMode,
-      hoveredObjectId: nearestObjectId,
-    });
-
-    // Handle grab/release transitions
-    const wasPinching = lastPinchStateRef.current;
-    const isPinching = result.isPinching;
-
-    // Get current hand size (distance from wrist to middle fingertip) as depth proxy
-    const currentHandSize = getHandSize(primaryHand.landmarks);
-
-    if (isPinching && !wasPinching) {
-      // Started pinching
-      initialScreenPosRef.current = { x: screenPos.x, y: screenPos.y };
-      initialHandSizeRef.current = currentHandSize;
+  
+  const processHands = useCallback(
+    (hands: HandData[], camera: THREE.Camera, _scene: THREE.Scene) => {
       
-      // Reset smoothed values
-      smoothedDeltaXRef.current = 0;
-      smoothedHandSizeRatioRef.current = 1;
-      
-      // Store initial camera position for rotation/zoom
-      const camPos = currentState.camera.position;
-      initialCameraRadiusRef.current = Math.sqrt(camPos[0] * camPos[0] + camPos[2] * camPos[2]);
-      initialCameraAngleRef.current = Math.atan2(camPos[0], camPos[2]);
-      
-      if (nearestObjectId) {
-        // Grab object
-        setPointer({ grabbedObjectId: nearestObjectId, mode: 'grabbing' });
-        selectObject(nearestObjectId);
-        currentCallbacks?.onGrab?.(nearestObjectId, worldPosition);
-        // Store initial scale for scaling
-        const obj = currentState.objects.find(o => o.id === nearestObjectId);
-        if (obj) {
-          initialScaleRef.current = [...obj.scale];
+      if (hands.length === 0) {
+        resetPinchState();
+        resetPositionSmoothing();
+        setGesture({ currentGesture: 'none', isPinching: false, pointerPosition: null, screenPosition: null });
+        setPointer({ visible: false, mode: 'idle', hoveredObjectId: null });
+
+        if (modeRef.current === 'grab' && grabState.objectId) {
+          doRelease();
         }
-        console.log('Grabbed object:', nearestObjectId);
-      } else {
-        // No object - will control camera
-        console.log('Camera control mode');
+        modeRef.current = 'idle';
+        wasPinching.current = false;
+        return;
       }
-      initialPinchDistRef.current = result.pinchDistance;
-    } else if (!isPinching && wasPinching) {
-      // Released pinch
-      if (currentState.pointer.grabbedObjectId) {
-        currentCallbacks?.onRelease?.(currentState.pointer.grabbedObjectId, worldPosition);
-        setPointer({ grabbedObjectId: null, mode: 'idle' });
-        console.log('Released object:', currentState.pointer.grabbedObjectId);
-      }
-      initialScreenPosRef.current = null;
-    } else if (isPinching && initialScreenPosRef.current && initialHandSizeRef.current > 0) {
-      const rawDeltaX = screenPos.x - initialScreenPosRef.current.x;
-      
-      // Hand size ratio: > 1 means hand moved closer, < 1 means moved farther
-      const rawHandSizeRatio = currentHandSize / initialHandSizeRef.current;
-      
-      // Apply smoothing (low-pass filter) to reduce jitter
-      const smoothingFactor = 0.3; // Lower = smoother but more lag
-      smoothedDeltaXRef.current = smoothedDeltaXRef.current + (rawDeltaX - smoothedDeltaXRef.current) * smoothingFactor;
-      smoothedHandSizeRatioRef.current = smoothedHandSizeRatioRef.current + (rawHandSizeRatio - smoothedHandSizeRatioRef.current) * smoothingFactor;
-      
-      // Apply dead zone to ignore tiny movements
-      const deadZone = 0.01;
-      const deltaX = Math.abs(smoothedDeltaXRef.current) < deadZone ? 0 : smoothedDeltaXRef.current;
-      const handSizeRatio = smoothedHandSizeRatioRef.current;
-      
-      if (currentState.pointer.grabbedObjectId) {
-        // Move grabbed object
-        currentCallbacks?.onMove?.(currentState.pointer.grabbedObjectId, worldPosition);
-        
-        // Scale object based on hand distance from camera (closer = bigger)
-        const clampedScale = Math.max(0.3, Math.min(3, handSizeRatio));
-        currentCallbacks?.onScale?.(currentState.pointer.grabbedObjectId, clampedScale);
-      } else {
-        // Camera control - smoothed direct mapping
-        const rotationSpeed = 4;
-        
-        // Rotate camera around Y axis - direct from initial angle + smoothed delta
-        const newAngle = initialCameraAngleRef.current + (deltaX * rotationSpeed);
-        
-        // Zoom camera based on hand distance (closer = zoom in) - direct from initial radius
-        const zoomRatio = 1 / handSizeRatio;
-        const newRadius = Math.max(5, Math.min(25, initialCameraRadiusRef.current * zoomRatio));
-        
-        const currentY = currentState.camera.position[1];
-        
-        setCamera({
-          position: [
-            Math.sin(newAngle) * newRadius,
-            currentY,
-            Math.cos(newAngle) * newRadius,
-          ],
-        });
-      }
-    }
 
-    lastGestureRef.current = result.gesture;
-    lastPinchStateRef.current = isPinching;
-  }, [screenToWorld, setGesture, setPointer, selectObject, setCamera, findNearestObject]);
+      const hand = hands[0];
+      const pinching = isPinching(hand.landmarks);
+      const gesture: GestureType = detectGesture(hand.landmarks, pinching);
+      const handScale = getHandScale(hand.landmarks);
+      const rollAngle = getHandRollAngle(hand.landmarks);
 
-  return {
-    processHands,
-    screenToWorld,
-  };
+      const screenPos = pinching
+        ? getPinchMidpoint(hand.landmarks)
+        : getPointerScreenPosition(hand.landmarks);
+
+      const worldPos = screenToWorld(screenPos, camera, 0.5);
+      const constrained = constrainToGround(worldPos);
+
+      setGesture({
+        currentGesture: gesture,
+        isPinching: pinching,
+        pointerPosition: constrained,
+        screenPosition: screenPos,
+      });
+
+      
+      if (pinching && !wasPinching.current) {
+        initialHandScaleRef.current = handScale;
+
+        const hit = findNearestObject(screenPos, camera, objectIdsRef.current);
+        if (hit) {
+          modeRef.current = 'grab';
+          velocityTracker.current.reset();
+
+          
+          
+          const camPos = new THREE.Vector3();
+          camera.getWorldPosition(camPos);
+          grabCameraDistRef.current = camPos.distanceTo(hit.worldPos);
+
+          
+          initialGrabDistRef.current = grabCameraDistRef.current;
+
+          
+          
+          const rayWorldPos = screenToWorldAtDistance(screenPos, camera, grabCameraDistRef.current);
+          grabOffsetRef.current = [
+            hit.worldPos.x - rayWorldPos[0],
+            hit.worldPos.y - rayWorldPos[1],
+            hit.worldPos.z - rayWorldPos[2],
+          ];
+
+          initialRollAngleRef.current = rollAngle;
+
+          
+          const obj = objectsRef.current.find((o) => o.id === hit.id);
+          initialObjectScaleRef.current = obj ? [...obj.scale] : [1, 1, 1];
+          secondHandActiveRef.current = false;
+          resetSpreadSmoothing();
+
+          
+          
+          const fwd = new THREE.Vector3();
+          camera.getWorldDirection(fwd);
+          fwd.normalize();
+
+          grabState.objectId = hit.id;
+          grabState.targetPosition = [hit.worldPos.x, hit.worldPos.y, hit.worldPos.z];
+          grabState.twistAngle = 0;
+          grabState.twistAxis = [fwd.x, fwd.y, fwd.z];
+          grabState.scaleFactor = 1;
+          grabState.pendingRelease = false;
+
+          selectObject(hit.id);
+          setPointer({ visible: true, mode: 'grabbing', grabbedObjectId: hit.id });
+        } else {
+          
+          modeRef.current = 'camera';
+          lastScreenPos.current = screenPos;
+          initialZoomRadiusRef.current = cameraZoomState.radius;
+          setPointer({ visible: true, mode: 'camera', grabbedObjectId: null });
+        }
+      }
+
+      
+      if (pinching && wasPinching.current) {
+        
+        const scaleRatio = initialHandScaleRef.current > 0.001
+          ? handScale / initialHandScaleRef.current
+          : 1;
+
+        if (modeRef.current === 'grab' && grabState.objectId) {
+          
+          
+          
+          if (Math.abs(scaleRatio - 1) > SCALE_DEADZONE) {
+            const depthRatio = Math.pow(1 / scaleRatio, DEPTH_SENSITIVITY);
+            grabCameraDistRef.current = Math.max(
+              MIN_GRAB_DIST,
+              Math.min(MAX_GRAB_DIST, initialGrabDistRef.current * depthRatio),
+            );
+          }
+
+          
+          
+          
+          
+          const rayPos = screenToWorldAtDistance(screenPos, camera, grabCameraDistRef.current);
+          const newPos: Vector3Tuple = [
+            rayPos[0] + grabOffsetRef.current[0],
+            rayPos[1] + grabOffsetRef.current[1],
+            rayPos[2] + grabOffsetRef.current[2],
+          ];
+
+          
+          const safePos = constrainToGround(newPos, 0.25);
+          velocityTracker.current.record(safePos);
+          grabState.targetPosition = safePos;
+
+          
+          const twistDelta = rollAngle - initialRollAngleRef.current;
+          grabState.twistAngle = twistDelta * TWIST_SENSITIVITY;
+
+          
+          if (hands.length >= 2) {
+            const secondHand = hands[1];
+            const spread = getFingerSpread(secondHand.landmarks);
+
+            if (!secondHandActiveRef.current) {
+              
+              initialSpreadRef.current = spread;
+              secondHandActiveRef.current = true;
+            } else {
+              
+              const ratio = initialSpreadRef.current > 0.001
+                ? spread / initialSpreadRef.current
+                : 1;
+              grabState.scaleFactor = Math.max(MIN_SCALE, Math.min(MAX_SCALE, ratio));
+            }
+          } else if (secondHandActiveRef.current) {
+            
+            secondHandActiveRef.current = false;
+            resetSpreadSmoothing();
+          }
+
+          setPointer({ position: safePos });
+
+        } else if (modeRef.current === 'camera' && lastScreenPos.current) {
+          
+          const dx = screenPos.x - lastScreenPos.current.x;
+          const dy = screenPos.y - lastScreenPos.current.y;
+
+          
+          if (Math.abs(dx) > ORBIT_DEADZONE || Math.abs(dy) > ORBIT_DEADZONE) {
+            orbitTheta += dx * ORBIT_SENSITIVITY;
+            orbitPhi = Math.max(0.2, Math.min(Math.PI / 2 - 0.05, orbitPhi + dy * ORBIT_SENSITIVITY));
+            lastScreenPos.current = screenPos;
+          }
+
+          
+          
+          
+          if (Math.abs(scaleRatio - 1) > SCALE_DEADZONE) {
+            const zoomRatio = Math.pow(1 / scaleRatio, ZOOM_SENSITIVITY);
+            const newRadius = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, initialZoomRadiusRef.current * zoomRatio));
+            cameraZoomState.radius = newRadius;
+          }
+
+          setCamera({ position: sphericalToCartesian(orbitTheta, orbitPhi, cameraZoomState.radius) });
+        }
+      }
+
+      
+      if (!pinching && wasPinching.current) {
+        if (modeRef.current === 'grab' && grabState.objectId) {
+          const f = grabState.scaleFactor;
+          if (f !== 1) {
+            const [sx, sy, sz] = initialObjectScaleRef.current;
+            updateObjectScale(grabState.objectId, [sx * f, sy * f, sz * f]);
+            updateObjectPosition(grabState.objectId, grabState.targetPosition);
+          }
+          secondHandActiveRef.current = false;
+          resetSpreadSmoothing();
+          doRelease();
+        }
+        modeRef.current = 'idle';
+        setPointer({ mode: 'idle', grabbedObjectId: null });
+      }
+
+      
+      if (!pinching && gesture === 'point') {
+        const hit = findNearestObject(screenPos, camera, objectIdsRef.current);
+        setPointer({ visible: true, position: constrained, mode: 'hovering', hoveredObjectId: hit?.id ?? null });
+      } else if (!pinching && gesture === 'none') {
+        setPointer({ visible: false, mode: 'idle', hoveredObjectId: null });
+      }
+
+      wasPinching.current = pinching;
+    },
+    [setGesture, setPointer, setCamera, selectObject, updateObjectScale, updateObjectPosition],
+  );
+
+  const doRelease = useCallback(() => {
+    grabState.releaseVelocity = velocityTracker.current.getVelocity();
+    grabState.pendingRelease = true;
+    velocityTracker.current.reset();
+  }, []);
+
+  return { processHands };
 }
-
-export default useGestureRecognition;

@@ -1,37 +1,29 @@
+import type { RefObject } from 'react';
+
 interface HandVisualizationProps {
-  videoRef: React.RefObject<HTMLVideoElement>;
-  canvasRef: React.RefObject<HTMLCanvasElement>;
+  videoRef: RefObject<HTMLVideoElement | null>;
+  canvasRef: RefObject<HTMLCanvasElement | null>;
   isTracking: boolean;
 }
 
-export function HandVisualization({ videoRef, canvasRef, isTracking }: HandVisualizationProps) {
+export function HandVisualization({
+  videoRef,
+  canvasRef,
+  isTracking,
+}: HandVisualizationProps) {
   return (
-    <div className="webcam-container">
+    <div className={`webcam-container ${isTracking ? 'active' : ''}`}>
       <video
         ref={videoRef}
-        className="webcam-video"
+        autoPlay
         playsInline
         muted
+        className="webcam-video"
       />
-      <canvas
-        ref={canvasRef}
-        className="hand-canvas"
-      />
+      <canvas ref={canvasRef} className="hand-canvas" />
       {!isTracking && (
-        <div style={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          color: 'white',
-          textAlign: 'center',
-          padding: '10px',
-        }}>
-          Camera not active
-        </div>
+        <div className="webcam-placeholder">Camera off</div>
       )}
     </div>
   );
 }
-
-export default HandVisualization;

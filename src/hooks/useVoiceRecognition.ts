@@ -1,203 +1,153 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { useSandbox } from '@/context/SandboxContext';
-import type { VoiceCommand } from '@/types';
-import { parseColorName, parseShapeType, getColorHex } from '@/constants/shapes';
+import { parseShapeType, parseColorName, getColorHex, getRandomColor } from '@/constants/shapes';
+import type { VoiceCommand, Vector3Tuple } from '@/types';
 
-// Extend Window interface for webkit speech recognition
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
+
+type SpeechRecognitionType = typeof window extends { SpeechRecognition: infer T } ? T : unknown;
+
+function getSpeechRecognition(): SpeechRecognitionType | null {
+  if (typeof window === 'undefined') return null;
+  
+  return (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition ?? null;
 }
 
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-  message: string;
-}
+export function useVoiceRecognition() {
+  const { state, addObject, removeObject, clearAllObjects, setVoice } = useSandbox();
 
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
-  onend: (() => void) | null;
-  onstart: (() => void) | null;
-}
+  const recognitionRef = useRef<InstanceType<ReturnType<typeof getSpeechRecognition> & (new () => unknown)> | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const isSupported = getSpeechRecognition() !== null;
 
-declare global {
-  interface Window {
-    webkitSpeechRecognition: new () => SpeechRecognition;
-    SpeechRecognition: new () => SpeechRecognition;
-  }
-}
+  
+  const pointerPosRef = useRef<Vector3Tuple>([0, 0.5, 0]);
+  useEffect(() => {
+    if (state.gesture.pointerPosition) {
+      pointerPosRef.current = state.gesture.pointerPosition;
+    }
+  }, [state.gesture.pointerPosition]);
 
-interface UseVoiceRecognitionOptions {
-  onCommand?: (command: VoiceCommand) => void;
-  language?: string;
-}
+  
+  const selectedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedIdRef.current = state.selectedObjectId;
+  }, [state.selectedObjectId]);
 
-export function useVoiceRecognition(options?: UseVoiceRecognitionOptions) {
-  const { state, setVoice, addObject, removeObject, clearAllObjects } = useSandbox();
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const [isSupported, setIsSupported] = useState(false);
-
-  // Parse voice command
+  
   const parseCommand = useCallback((transcript: string): VoiceCommand | null => {
-    const normalized = transcript.toLowerCase().trim();
-    
-    // Create command: "create [color] [shape]"
-    if (normalized.includes('create') || normalized.includes('add') || normalized.includes('make')) {
-      const shape = parseShapeType(normalized);
-      if (shape) {
-        const color = parseColorName(normalized);
-        return {
-          type: 'create',
-          shape,
-          color: color || undefined,
-        };
-      }
-    }
+    const lower = transcript.toLowerCase().trim();
 
-    // Delete command
-    if (normalized.includes('delete') || normalized.includes('remove')) {
-      return { type: 'delete' };
-    }
-
-    // Clear all command
-    if (normalized.includes('clear all') || normalized.includes('delete all') || normalized.includes('remove all')) {
+    if (lower.includes('clear all') || lower.includes('clear everything')) {
       return { type: 'clear' };
     }
-
+    if (lower.includes('delete') || lower.includes('remove')) {
+      return { type: 'delete' };
+    }
+    if (lower.includes('create') || lower.includes('make') || lower.includes('add') || lower.includes('spawn')) {
+      const shape = parseShapeType(lower);
+      const color = parseColorName(lower);
+      return { type: 'create', shape: shape ?? 'cube', color: color ?? undefined };
+    }
     return null;
   }, []);
 
-  // Execute voice command
-  const executeCommand = useCallback((command: VoiceCommand) => {
-    switch (command.type) {
-      case 'create':
-        if (command.shape && state.gesture.pointerPosition) {
-          const color = command.color ? getColorHex(command.color) : undefined;
-          addObject(command.shape, state.gesture.pointerPosition, color);
+  
+  const executeCommand = useCallback(
+    (cmd: VoiceCommand) => {
+      switch (cmd.type) {
+        case 'create': {
+          const pos: Vector3Tuple = [...pointerPosRef.current];
+          
+          if (pos[1] < 0.5) pos[1] = 0.5;
+          const colorHex = cmd.color ? getColorHex(cmd.color) : getRandomColor();
+          addObject(cmd.shape ?? 'cube', pos, colorHex);
+          break;
         }
-        break;
-
-      case 'delete':
-        if (state.selectedObjectId) {
-          removeObject(state.selectedObjectId);
+        case 'delete': {
+          if (selectedIdRef.current) {
+            removeObject(selectedIdRef.current);
+          }
+          break;
         }
-        break;
+        case 'clear':
+          clearAllObjects();
+          break;
+      }
+    },
+    [addObject, removeObject, clearAllObjects],
+  );
 
-      case 'clear':
-        clearAllObjects();
-        break;
-    }
-
-    options?.onCommand?.(command);
-  }, [
-    state.gesture.pointerPosition,
-    state.selectedObjectId,
-    addObject,
-    removeObject,
-    clearAllObjects,
-    options,
-  ]);
-
-  // Initialize speech recognition
-  useEffect(() => {
-    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-    
-    if (!SpeechRecognitionAPI) {
-      setIsSupported(false);
-      setVoice({ isSupported: false, error: 'Speech recognition not supported' });
+  
+  const startListening = useCallback(() => {
+    const Ctor = getSpeechRecognition();
+    if (!Ctor) {
+      setVoice({ error: 'Speech recognition not supported in this browser' });
       return;
     }
 
-    setIsSupported(true);
-    setVoice({ isSupported: true });
-
-    const recognition = new SpeechRecognitionAPI();
+    
+    const recognition = new (Ctor as any)();
     recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = options?.language || 'en-US';
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
 
-    recognition.onstart = () => {
-      setVoice({ isListening: true, error: null });
-    };
-
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      const lastResult = event.results[event.results.length - 1];
-      const transcript = lastResult[0].transcript;
-      
+    recognition.onresult = (event: { results: { length: number; [key: number]: { [key: number]: { transcript: string } } } }) => {
+      const last = event.results[event.results.length - 1];
+      const transcript = last[0].transcript;
       setVoice({ lastCommand: transcript });
 
-      // Only process final results
-      if (lastResult.isFinal) {
-        const command = parseCommand(transcript);
-        if (command) {
-          setVoice({ lastParsedCommand: command });
-          executeCommand(command);
-        }
+      const cmd = parseCommand(transcript);
+      if (cmd) {
+        setVoice({ lastParsedCommand: cmd });
+        executeCommand(cmd);
       }
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      console.error('Speech recognition error:', event.error);
-      setVoice({ error: event.error, isListening: false });
+    recognition.onerror = (event: { error: string }) => {
+      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      console.warn('Speech recognition error:', event.error);
+      setVoice({ error: event.error });
     };
 
     recognition.onend = () => {
-      setVoice({ isListening: false });
       
-      // Auto-restart if still mounted
       if (recognitionRef.current) {
         try {
           recognition.start();
-        } catch (e) {
-          // Ignore - may already be running
+        } catch {
+          
         }
       }
     };
 
+    recognition.start();
     recognitionRef.current = recognition;
+    setIsListening(true);
+    setVoice({ isListening: true, error: null });
+  }, [parseCommand, executeCommand, setVoice]);
 
+  
+  const stopListening = useCallback(() => {
+    if (recognitionRef.current) {
+      const r = recognitionRef.current;
+      recognitionRef.current = null;
+      
+      (r as any).stop?.();
+    }
+    setIsListening(false);
+    setVoice({ isListening: false });
+  }, [setVoice]);
+
+  
+  useEffect(() => {
     return () => {
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        
+        (recognitionRef.current as any).stop?.();
         recognitionRef.current = null;
       }
     };
-  }, [options?.language, parseCommand, executeCommand, setVoice]);
-
-  // Start listening
-  const startListening = useCallback(() => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.start();
-      } catch (e) {
-        // May already be running
-      }
-    }
   }, []);
 
-  // Stop listening
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-  }, []);
-
-  return {
-    isSupported,
-    isListening: state.voice.isListening,
-    lastCommand: state.voice.lastCommand,
-    lastParsedCommand: state.voice.lastParsedCommand,
-    error: state.voice.error,
-    startListening,
-    stopListening,
-  };
+  return { isSupported, isListening, startListening, stopListening };
 }
-
-export default useVoiceRecognition;

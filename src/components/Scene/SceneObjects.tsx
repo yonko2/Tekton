@@ -1,36 +1,39 @@
+import { useCallback } from 'react';
 import { useSandbox } from '@/context/SandboxContext';
-import { SceneObject } from './SceneObject';
+import { PhysicsObject } from './PhysicsObject';
 
 export function SceneObjects() {
   const { state, selectObject, setPointer } = useSandbox();
 
-  const handlePointerOver = (objectId: string) => {
-    setPointer({ hoveredObjectId: objectId, mode: 'hovering' });
-  };
+  const handlePointerOver = useCallback(
+    (id: string) => {
+      setPointer({ hoveredObjectId: id });
+    },
+    [setPointer],
+  );
 
-  const handlePointerOut = () => {
-    if (state.pointer.mode === 'hovering') {
-      setPointer({ hoveredObjectId: null, mode: 'idle' });
-    }
-  };
+  const handlePointerOut = useCallback(() => {
+    setPointer({ hoveredObjectId: null });
+  }, [setPointer]);
 
-  const handleClick = (objectId: string) => {
-    selectObject(state.selectedObjectId === objectId ? null : objectId);
-  };
+  const handleClick = useCallback(
+    (id: string) => {
+      selectObject(id);
+    },
+    [selectObject],
+  );
 
   return (
-    <group>
-      {state.objects.map((object) => (
-        <SceneObject
-          key={object.id}
-          object={object}
-          onPointerOver={() => handlePointerOver(object.id)}
+    <>
+      {state.objects.map((obj) => (
+        <PhysicsObject
+          key={`${obj.id}_${obj.scale.join(',')}`}
+          object={obj}
+          onPointerOver={() => handlePointerOver(obj.id)}
           onPointerOut={handlePointerOut}
-          onClick={() => handleClick(object.id)}
+          onClick={() => handleClick(obj.id)}
         />
       ))}
-    </group>
+    </>
   );
 }
-
-export default SceneObjects;

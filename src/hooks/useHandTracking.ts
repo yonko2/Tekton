@@ -1,346 +1,208 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
-import type { NormalizedLandmark } from '@mediapipe/hands';
-import type { HandLandmarks } from '@/types';
+import { useRef, useState, useCallback, useEffect } from 'react';
+import {
+  FilesetResolver,
+  HandLandmarker,
+  type HandLandmarkerResult,
+} from '@mediapipe/tasks-vision';
+import type { HandData, NormalizedLandmark } from '@/types';
+import { HAND_LANDMARKS } from '@/types';
 
-// Dynamic import types
-interface MediaPipeHands {
-  setOptions: (options: {
-    maxNumHands: number;
-    modelComplexity: number;
-    minDetectionConfidence: number;
-    minTrackingConfidence: number;
-  }) => void;
-  onResults: (callback: (results: MediaPipeResults) => void) => void;
-  send: (input: { image: HTMLVideoElement }) => Promise<void>;
-  close: () => void;
-}
 
-interface MediaPipeResults {
-  multiHandLandmarks?: NormalizedLandmark[][];
-  multiHandedness?: { label: string }[];
-}
+const HAND_CONNECTIONS: [number, number][] = [
+  [HAND_LANDMARKS.WRIST, HAND_LANDMARKS.THUMB_CMC],
+  [HAND_LANDMARKS.THUMB_CMC, HAND_LANDMARKS.THUMB_MCP],
+  [HAND_LANDMARKS.THUMB_MCP, HAND_LANDMARKS.THUMB_IP],
+  [HAND_LANDMARKS.THUMB_IP, HAND_LANDMARKS.THUMB_TIP],
+  [HAND_LANDMARKS.WRIST, HAND_LANDMARKS.INDEX_MCP],
+  [HAND_LANDMARKS.INDEX_MCP, HAND_LANDMARKS.INDEX_PIP],
+  [HAND_LANDMARKS.INDEX_PIP, HAND_LANDMARKS.INDEX_DIP],
+  [HAND_LANDMARKS.INDEX_DIP, HAND_LANDMARKS.INDEX_TIP],
+  [HAND_LANDMARKS.WRIST, HAND_LANDMARKS.MIDDLE_MCP],
+  [HAND_LANDMARKS.MIDDLE_MCP, HAND_LANDMARKS.MIDDLE_PIP],
+  [HAND_LANDMARKS.MIDDLE_PIP, HAND_LANDMARKS.MIDDLE_DIP],
+  [HAND_LANDMARKS.MIDDLE_DIP, HAND_LANDMARKS.MIDDLE_TIP],
+  [HAND_LANDMARKS.WRIST, HAND_LANDMARKS.RING_MCP],
+  [HAND_LANDMARKS.RING_MCP, HAND_LANDMARKS.RING_PIP],
+  [HAND_LANDMARKS.RING_PIP, HAND_LANDMARKS.RING_DIP],
+  [HAND_LANDMARKS.RING_DIP, HAND_LANDMARKS.RING_TIP],
+  [HAND_LANDMARKS.WRIST, HAND_LANDMARKS.PINKY_MCP],
+  [HAND_LANDMARKS.PINKY_MCP, HAND_LANDMARKS.PINKY_PIP],
+  [HAND_LANDMARKS.PINKY_PIP, HAND_LANDMARKS.PINKY_DIP],
+  [HAND_LANDMARKS.PINKY_DIP, HAND_LANDMARKS.PINKY_TIP],
+  [HAND_LANDMARKS.INDEX_MCP, HAND_LANDMARKS.MIDDLE_MCP],
+  [HAND_LANDMARKS.MIDDLE_MCP, HAND_LANDMARKS.RING_MCP],
+  [HAND_LANDMARKS.RING_MCP, HAND_LANDMARKS.PINKY_MCP],
+];
 
 interface UseHandTrackingOptions {
-  onResults: (hands: HandLandmarks[]) => void;
-  maxNumHands?: number;
-  minDetectionConfidence?: number;
-  minTrackingConfidence?: number;
+  onResults: (hands: HandData[]) => void;
 }
 
-interface UseHandTrackingReturn {
-  videoRef: React.RefObject<HTMLVideoElement>;
-  canvasRef: React.RefObject<HTMLCanvasElement>;
-  isLoading: boolean;
-  isTracking: boolean;
-  error: string | null;
-  startTracking: () => Promise<void>;
-  stopTracking: () => void;
-}
-
-// Load MediaPipe from CDN with specific version
-async function loadMediaPipeHands(): Promise<new (config: { locateFile: (file: string) => string }) => MediaPipeHands> {
-  return new Promise((resolve, reject) => {
-    // Check if already loaded
-    if ((window as any).Hands) {
-      resolve((window as any).Hands);
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.min.js';
-    script.crossOrigin = 'anonymous';
-    
-    script.onload = () => {
-      // Give it a moment to register
-      setTimeout(() => {
-        if ((window as any).Hands) {
-          resolve((window as any).Hands);
-        } else {
-          reject(new Error('MediaPipe Hands not found after script load'));
-        }
-      }, 100);
-    };
-    
-    script.onerror = () => reject(new Error('Failed to load MediaPipe Hands script'));
-    document.head.appendChild(script);
-  });
-}
-
-export function useHandTracking({
-  onResults,
-  maxNumHands = 2,
-  minDetectionConfidence = 0.7,
-  minTrackingConfidence = 0.5,
-}: UseHandTrackingOptions): UseHandTrackingReturn {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const handsRef = useRef<MediaPipeHands | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
+export function useHandTracking({ onResults }: UseHandTrackingOptions) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const landmarkerRef = useRef<HandLandmarker | null>(null);
+  const rafRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
   const onResultsRef = useRef(onResults);
-  const isTrackingRef = useRef(false);
-  
-  const [isLoading, setIsLoading] = useState(true);
+  onResultsRef.current = onResults;
+
+  const [isLoading, setIsLoading] = useState(false);
   const [isTracking, setIsTracking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Keep onResults ref up to date
+  
+  
+  
+  const isTrackingRef = useRef(false);
+  const isLoadingRef = useRef(false);
+
+  
   useEffect(() => {
-    onResultsRef.current = onResults;
-  }, [onResults]);
-
-  // Keep isTracking ref in sync
-  useEffect(() => {
-    isTrackingRef.current = isTracking;
-  }, [isTracking]);
-
-  // Initialize MediaPipe Hands on mount
-  useEffect(() => {
-    let mounted = true;
-
-    async function init() {
-      try {
-        console.log('Loading MediaPipe Hands...');
-        const Hands = await loadMediaPipeHands();
-        
-        if (!mounted) return;
-        console.log('MediaPipe Hands loaded, initializing...');
-        
-        const hands = new Hands({
-          locateFile: (file: string) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`;
-          },
-        });
-
-        hands.setOptions({
-          maxNumHands,
-          modelComplexity: 1,
-          minDetectionConfidence,
-          minTrackingConfidence,
-        });
-
-        hands.onResults((results: MediaPipeResults) => {
-          const handResults: HandLandmarks[] = [];
-
-          if (results.multiHandLandmarks && results.multiHandedness) {
-            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-              const landmarks = results.multiHandLandmarks[i];
-              const handedness = results.multiHandedness[i];
-              
-              handResults.push({
-                landmarks: landmarks as NormalizedLandmark[],
-                handedness: handedness.label as 'Left' | 'Right',
-              });
-            }
-          }
-
-          onResultsRef.current(handResults);
-
-          // Draw landmarks on canvas for visualization
-          if (canvasRef.current) {
-            const ctx = canvasRef.current.getContext('2d');
-            if (ctx) {
-              ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-              
-              if (results.multiHandLandmarks) {
-                for (const landmarks of results.multiHandLandmarks) {
-                  drawLandmarks(ctx, landmarks, canvasRef.current.width, canvasRef.current.height);
-                }
-              }
-            }
-          }
-        });
-
-        handsRef.current = hands;
-        
-        if (mounted) {
-          console.log('MediaPipe Hands initialized successfully');
-          setIsLoading(false);
-        }
-      } catch (err) {
-        console.error('Failed to initialize MediaPipe Hands:', err);
-        if (mounted) {
-          setError('Failed to initialize hand tracking: ' + (err as Error).message);
-          setIsLoading(false);
-        }
-      }
-    }
-
-    init();
-
     return () => {
-      mounted = false;
-      if (handsRef.current) {
-        handsRef.current.close();
-        handsRef.current = null;
-      }
+      cancelAnimationFrame(rafRef.current);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      landmarkerRef.current?.close();
     };
-  }, [maxNumHands, minDetectionConfidence, minTrackingConfidence]);
-
-  // Detection loop
-  const runDetection = useCallback(async () => {
-    if (!handsRef.current || !videoRef.current || !isTrackingRef.current) return;
-
-    if (videoRef.current.readyState >= 2) {
-      try {
-        await handsRef.current.send({ image: videoRef.current });
-      } catch (e) {
-        // Ignore send errors during cleanup
-      }
-    }
-
-    if (isTrackingRef.current) {
-      animationFrameRef.current = requestAnimationFrame(runDetection);
-    }
   }, []);
 
-  // Start tracking
+  
+  const drawLandmarks = useCallback(
+    (results: HandLandmarkerResult) => {
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      if (!canvas || !video) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (const hand of results.landmarks) {
+        
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 2;
+        for (const [a, b] of HAND_CONNECTIONS) {
+          const pA = hand[a];
+          const pB = hand[b];
+          ctx.beginPath();
+          ctx.moveTo(pA.x * canvas.width, pA.y * canvas.height);
+          ctx.lineTo(pB.x * canvas.width, pB.y * canvas.height);
+          ctx.stroke();
+        }
+
+        
+        for (const lm of hand) {
+          ctx.fillStyle = '#ff0066';
+          ctx.beginPath();
+          ctx.arc(lm.x * canvas.width, lm.y * canvas.height, 3, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      }
+    },
+    [],
+  );
+
+  
+  
+  
   const startTracking = useCallback(async () => {
-    console.log('startTracking called', { 
-      handsReady: !!handsRef.current, 
-      videoReady: !!videoRef.current 
-    });
+    if (isTrackingRef.current || isLoadingRef.current) return;
 
-    if (!handsRef.current) {
-      console.warn('Hand tracking not initialized yet, retrying in 500ms...');
-      setTimeout(() => startTracking(), 500);
-      return;
-    }
-
-    if (!videoRef.current) {
-      console.warn('Video element not available, retrying in 500ms...');
-      setTimeout(() => startTracking(), 500);
-      return;
-    }
+    isLoadingRef.current = true;
+    setIsLoading(true);
+    setError(null);
 
     try {
-      console.log('Requesting camera access...');
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user',
+      
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm',
+      );
+
+      const landmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+          delegate: 'GPU',
         },
+        runningMode: 'VIDEO',
+        numHands: 2,
+        minHandDetectionConfidence: 0.5,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
       });
 
-      console.log('Camera stream obtained');
+      landmarkerRef.current = landmarker;
+
+      
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: 640, height: 480 },
+      });
       streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      
-      await new Promise<void>((resolve) => {
-        if (videoRef.current) {
-          videoRef.current.onloadedmetadata = () => {
-            console.log('Video metadata loaded');
-            resolve();
-          };
-        }
-      });
-      
-      await videoRef.current.play();
-      console.log('Video playing');
 
-      // Set canvas size
-      if (canvasRef.current) {
-        canvasRef.current.width = videoRef.current.videoWidth || 640;
-        canvasRef.current.height = videoRef.current.videoHeight || 480;
-      }
+      
+      const video = videoRef.current;
+      if (!video) throw new Error('Video element not mounted');
+      video.srcObject = stream;
+      await video.play();
 
-      setIsTracking(true);
       isTrackingRef.current = true;
+      isLoadingRef.current = false;
+      setIsTracking(true);
+      setIsLoading(false);
+
       
-      console.log('Hand tracking started successfully');
-      // Start detection loop
-      runDetection();
+      let lastTime = -1;
+      const detect = () => {
+        if (!video || video.readyState < 2) {
+          rafRef.current = requestAnimationFrame(detect);
+          return;
+        }
+
+        const now = performance.now();
+        if (now === lastTime) {
+          rafRef.current = requestAnimationFrame(detect);
+          return;
+        }
+        lastTime = now;
+
+        const results = landmarker.detectForVideo(video, now);
+
+        
+        const hands: HandData[] = (results.landmarks ?? []).map(
+          (lm: NormalizedLandmark[], i: number) => ({
+            landmarks: lm,
+            worldLandmarks: results.worldLandmarks?.[i] ?? lm,
+            handedness:
+              (results.handednesses?.[i]?.[0]?.categoryName as 'Left' | 'Right') ?? 'Right',
+          }),
+        );
+
+        onResultsRef.current(hands);
+        drawLandmarks(results);
+
+        rafRef.current = requestAnimationFrame(detect);
+      };
+
+      rafRef.current = requestAnimationFrame(detect);
     } catch (err) {
-      console.error('Failed to start camera:', err);
-      setError('Failed to access camera. Please grant camera permissions.');
+      console.error('Hand tracking init failed:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+      isLoadingRef.current = false;
+      setIsLoading(false);
     }
-  }, [runDetection]);
+  }, [drawLandmarks]); 
 
-  // Stop tracking
+  
   const stopTracking = useCallback(() => {
-    isTrackingRef.current = false;
-    
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-
+    cancelAnimationFrame(rafRef.current);
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    landmarkerRef.current?.close();
+    landmarkerRef.current = null;
     setIsTracking(false);
   }, []);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopTracking();
-    };
-  }, [stopTracking]);
-
-  return {
-    videoRef,
-    canvasRef,
-    isLoading,
-    isTracking,
-    error,
-    startTracking,
-    stopTracking,
-  };
+  return { videoRef, canvasRef, isLoading, isTracking, error, startTracking, stopTracking };
 }
-
-// Draw hand landmarks on canvas
-function drawLandmarks(
-  ctx: CanvasRenderingContext2D,
-  landmarks: NormalizedLandmark[],
-  width: number,
-  height: number
-) {
-  // Connection pairs for hand skeleton
-  const connections = [
-    [0, 1], [1, 2], [2, 3], [3, 4], // Thumb
-    [0, 5], [5, 6], [6, 7], [7, 8], // Index
-    [0, 9], [9, 10], [10, 11], [11, 12], // Middle
-    [0, 13], [13, 14], [14, 15], [15, 16], // Ring
-    [0, 17], [17, 18], [18, 19], [19, 20], // Pinky
-    [5, 9], [9, 13], [13, 17], // Palm
-  ];
-
-  // Draw connections
-  ctx.strokeStyle = '#00ff00';
-  ctx.lineWidth = 2;
-  
-  for (const [start, end] of connections) {
-    const startPoint = landmarks[start];
-    const endPoint = landmarks[end];
-    
-    ctx.beginPath();
-    ctx.moveTo(startPoint.x * width, startPoint.y * height);
-    ctx.lineTo(endPoint.x * width, endPoint.y * height);
-    ctx.stroke();
-  }
-
-  // Draw landmarks
-  for (let i = 0; i < landmarks.length; i++) {
-    const landmark = landmarks[i];
-    const x = landmark.x * width;
-    const y = landmark.y * height;
-
-    // Highlight fingertips
-    const isFingertip = [4, 8, 12, 16, 20].includes(i);
-    
-    ctx.beginPath();
-    ctx.arc(x, y, isFingertip ? 6 : 4, 0, 2 * Math.PI);
-    ctx.fillStyle = isFingertip ? '#ff6600' : '#00ff00';
-    ctx.fill();
-  }
-}
-
-export default useHandTracking;

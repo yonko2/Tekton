@@ -1,40 +1,50 @@
+import type { RefObject } from 'react';
 import { useSandbox } from '@/context/SandboxContext';
 import { HandVisualization } from './HandVisualization';
-import { VoiceIndicator } from './VoiceIndicator';
 import { StatusPanel } from './StatusPanel';
+import { VoiceIndicator } from './VoiceIndicator';
 import { Instructions } from './Instructions';
+import { SpawnBar } from './SpawnBar';
 
 interface OverlayProps {
-  videoRef: React.RefObject<HTMLVideoElement>;
-  canvasRef: React.RefObject<HTMLCanvasElement>;
+  videoRef: RefObject<HTMLVideoElement | null>;
+  canvasRef: RefObject<HTMLCanvasElement | null>;
   isTracking: boolean;
   isVoiceListening: boolean;
 }
 
-export function Overlay({ videoRef, canvasRef, isTracking, isVoiceListening }: OverlayProps) {
+export function Overlay({
+  videoRef,
+  canvasRef,
+  isTracking,
+  isVoiceListening,
+}: OverlayProps) {
   const { state } = useSandbox();
+
+  const selectedObj =
+    state.selectedObjectId
+      ? state.objects.find((o) => o.id === state.selectedObjectId) ?? null
+      : null;
 
   return (
     <div className="overlay-container">
-      {/* Status Panel */}
+      <SpawnBar />
+
       <StatusPanel
         gesture={state.gesture.currentGesture}
         objectCount={state.objects.length}
-        selectedObject={state.selectedObjectId ? state.objects.find(o => o.id === state.selectedObjectId) ?? null : null}
+        selectedObject={selectedObj}
         isTracking={isTracking}
       />
 
-      {/* Instructions Panel */}
       <Instructions />
 
-      {/* Webcam with hand visualization */}
       <HandVisualization
         videoRef={videoRef}
         canvasRef={canvasRef}
         isTracking={isTracking}
       />
 
-      {/* Voice indicator */}
       <VoiceIndicator
         isListening={isVoiceListening}
         lastCommand={state.voice.lastCommand}
@@ -42,5 +52,3 @@ export function Overlay({ videoRef, canvasRef, isTracking, isVoiceListening }: O
     </div>
   );
 }
-
-export default Overlay;

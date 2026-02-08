@@ -1,24 +1,16 @@
-import { useRef } from 'react';
-import * as THREE from 'three';
 import { SCENE_CONFIG } from '@/types';
 
-interface LightingProps {
-  showHelpers?: boolean;
-}
-
-export function Lighting({ showHelpers: _showHelpers = false }: LightingProps) {
+export function Lighting() {
   const { lighting } = SCENE_CONFIG;
-  const directionalLightRef = useRef<THREE.DirectionalLight>(null);
 
   return (
     <>
-      {/* Ambient light for overall illumination */}
+      {/* Ambient fill */}
       <ambientLight intensity={lighting.ambient.intensity} />
 
       {/* Main directional light with shadows */}
       <directionalLight
-        ref={directionalLightRef}
-        position={lighting.directional.position}
+        position={lighting.directional.position as [number, number, number]}
         intensity={lighting.directional.intensity}
         castShadow={lighting.directional.castShadow}
         shadow-mapSize-width={lighting.directional.shadowMapSize}
@@ -32,17 +24,10 @@ export function Lighting({ showHelpers: _showHelpers = false }: LightingProps) {
       />
 
       {/* Fill light from opposite side */}
-      <directionalLight
-        position={[-5, 8, -5]}
-        intensity={0.3}
-      />
+      <directionalLight position={[-5, 8, -5]} intensity={0.3} />
 
-      {/* Hemisphere light for sky/ground color variation */}
-      <hemisphereLight
-        args={['#87ceeb', '#505050', 0.3]}
-      />
+      {/* Sky / ground colour variation */}
+      <hemisphereLight args={['#87ceeb', '#3a3a4a', 0.3]} />
     </>
   );
 }
-
-export default Lighting;

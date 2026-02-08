@@ -1,15 +1,9 @@
-import type { NormalizedLandmark } from '@mediapipe/hands';
+export type ShapeType = 'cube' | 'sphere' | 'cylinder' | 'pyramid';
 
-// Shape types
-export type ShapeType = 'cube' | 'sphere' | 'cylinder' | 'cone' | 'torus' | 'pyramid';
+export type ColorName = 'red' | 'blue' | 'green' | 'yellow' | 'orange' | 'purple' | 'white' | 'gray';
 
-// Predefined colors
-export type ColorName = 'red' | 'blue' | 'green' | 'yellow' | 'orange' | 'purple' | 'white' | 'black';
-
-// 3D Vector types
 export type Vector3Tuple = [number, number, number];
 
-// Scene Object
 export interface SceneObject {
   id: string;
   type: ShapeType;
@@ -20,23 +14,26 @@ export interface SceneObject {
   isSelected: boolean;
 }
 
-// Hand Tracking
-export interface HandLandmarks {
+export interface NormalizedLandmark {
+  x: number;
+  y: number;
+  z: number;
+  visibility?: number;
+}
+
+export interface HandData {
   landmarks: NormalizedLandmark[];
+  worldLandmarks: NormalizedLandmark[];
   handedness: 'Left' | 'Right';
 }
 
 export interface HandTrackingState {
   isTracking: boolean;
-  hands: HandLandmarks[];
-  primaryHand: HandLandmarks | null;
+  hands: HandData[];
+  primaryHand: HandData | null;
 }
 
-// Gesture Types
-export type GestureType = 
-  | 'none'
-  | 'point'
-  | 'pinch';
+export type GestureType = 'none' | 'point' | 'pinch';
 
 export interface GestureState {
   currentGesture: GestureType;
@@ -47,8 +44,7 @@ export interface GestureState {
   confidence: number;
 }
 
-// Pointer State
-export type PointerMode = 'idle' | 'hovering' | 'grabbing' | 'scaling';
+export type PointerMode = 'idle' | 'hovering' | 'grabbing' | 'camera';
 
 export interface PointerState {
   visible: boolean;
@@ -58,7 +54,6 @@ export interface PointerState {
   grabbedObjectId: string | null;
 }
 
-// Voice Recognition
 export interface VoiceCommand {
   type: 'create' | 'delete' | 'clear';
   shape?: ShapeType;
@@ -73,14 +68,12 @@ export interface VoiceState {
   error: string | null;
 }
 
-// Camera State
 export interface CameraState {
   position: Vector3Tuple;
   target: Vector3Tuple;
   zoom: number;
 }
 
-// Application State
 export interface SandboxState {
   objects: SceneObject[];
   selectedObjectId: string | null;
@@ -93,7 +86,6 @@ export interface SandboxState {
   hasPermissions: boolean;
 }
 
-// Action Types
 export type SandboxAction =
   | { type: 'ADD_OBJECT'; payload: Omit<SceneObject, 'id' | 'isSelected'> }
   | { type: 'REMOVE_OBJECT'; payload: string }
@@ -108,7 +100,6 @@ export type SandboxAction =
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_PERMISSIONS'; payload: boolean };
 
-// Landmark indices for MediaPipe Hands
 export const HAND_LANDMARKS = {
   WRIST: 0,
   THUMB_CMC: 1,
@@ -133,18 +124,17 @@ export const HAND_LANDMARKS = {
   PINKY_TIP: 20,
 } as const;
 
-// Scene configuration
 export const SCENE_CONFIG = {
   ground: {
-    size: [20, 20] as [number, number],
-    color: '#505050',
+    size: [30, 30] as [number, number],
+    color: '#3a3a4a',
     receiveShadow: true,
   },
   lighting: {
     ambient: { intensity: 0.4 },
     directional: {
       position: [10, 15, 10] as Vector3Tuple,
-      intensity: 1,
+      intensity: 1.2,
       castShadow: true,
       shadowMapSize: 2048,
     },

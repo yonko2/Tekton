@@ -1,34 +1,19 @@
-import type { ShapeType, ColorName } from '@/types';
+import type { ShapeType, ColorName, Vector3Tuple } from '@/types';
 
-// Predefined shape configurations
-export const SHAPES: Record<ShapeType, { name: string; defaultScale: [number, number, number] }> = {
-  cube: {
-    name: 'Cube',
-    defaultScale: [1, 1, 1],
-  },
-  sphere: {
-    name: 'Sphere',
-    defaultScale: [0.5, 0.5, 0.5],
-  },
-  cylinder: {
-    name: 'Cylinder',
-    defaultScale: [0.5, 1, 0.5],
-  },
-  cone: {
-    name: 'Cone',
-    defaultScale: [0.5, 1, 0.5],
-  },
-  torus: {
-    name: 'Torus',
-    defaultScale: [0.5, 0.5, 0.5],
-  },
-  pyramid: {
-    name: 'Pyramid',
-    defaultScale: [1, 1, 1],
-  },
+
+export interface ShapeConfig {
+  name: string;
+  defaultScale: Vector3Tuple;
+}
+
+export const SHAPES: Record<ShapeType, ShapeConfig> = {
+  cube: { name: 'Cube', defaultScale: [1, 1, 1] },
+  sphere: { name: 'Sphere', defaultScale: [1, 1, 1] },
+  cylinder: { name: 'Cylinder', defaultScale: [1, 1, 1] },
+  pyramid: { name: 'Pyramid', defaultScale: [1, 1, 1] },
 };
 
-// Predefined colors with hex values
+
 export const COLORS: Record<ColorName, string> = {
   red: '#e53935',
   blue: '#1e88e5',
@@ -37,42 +22,34 @@ export const COLORS: Record<ColorName, string> = {
   orange: '#fb8c00',
   purple: '#8e24aa',
   white: '#fafafa',
-  black: '#212121',
+  gray: '#757575',
 };
 
-// Color name to hex lookup
-export const getColorHex = (colorName: ColorName): string => {
-  return COLORS[colorName] || COLORS.blue;
-};
 
-// All available shape types
-export const SHAPE_TYPES: ShapeType[] = ['cube', 'sphere', 'cylinder', 'cone', 'torus', 'pyramid'];
+export const SHAPE_TYPES: ShapeType[] = ['cube', 'sphere', 'cylinder', 'pyramid'];
+export const COLOR_NAMES: ColorName[] = ['red', 'blue', 'green', 'yellow', 'orange', 'purple', 'white', 'gray'];
 
-// All available color names
-export const COLOR_NAMES: ColorName[] = ['red', 'blue', 'green', 'yellow', 'orange', 'purple', 'white', 'black'];
+export const getColorHex = (name: ColorName): string => COLORS[name] ?? COLORS.blue;
 
-// Parse color name from voice input
-export const parseColorName = (input: string): ColorName | null => {
-  const normalized = input.toLowerCase().trim();
-  const found = COLOR_NAMES.find(c => normalized.includes(c));
-  return found || null;
-};
 
-// Parse shape type from voice input
 export const parseShapeType = (input: string): ShapeType | null => {
-  const normalized = input.toLowerCase().trim();
-  const found = SHAPE_TYPES.find(s => normalized.includes(s));
-  return found || null;
+  const lower = input.toLowerCase().trim();
+  
+  if (lower.includes('box')) return 'cube';
+  return SHAPE_TYPES.find((s) => lower.includes(s)) ?? null;
 };
 
-// Get random color
+export const parseColorName = (input: string): ColorName | null => {
+  const lower = input.toLowerCase().trim();
+  if (lower.includes('grey')) return 'gray';
+  return COLOR_NAMES.find((c) => lower.includes(c)) ?? null;
+};
+
+
 export const getRandomColor = (): string => {
-  const colorKeys = Object.keys(COLORS) as ColorName[];
-  const randomKey = colorKeys[Math.floor(Math.random() * colorKeys.length)];
-  return COLORS[randomKey];
+  const keys = Object.keys(COLORS) as ColorName[];
+  return COLORS[keys[Math.floor(Math.random() * keys.length)]];
 };
 
-// Get random shape type
-export const getRandomShapeType = (): ShapeType => {
-  return SHAPE_TYPES[Math.floor(Math.random() * SHAPE_TYPES.length)];
-};
+export const getRandomShapeType = (): ShapeType =>
+  SHAPE_TYPES[Math.floor(Math.random() * SHAPE_TYPES.length)];

@@ -1,59 +1,66 @@
-import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Environment } from '@react-three/drei';
 import { Suspense, useEffect } from 'react';
+import { Canvas, useThree } from '@react-three/fiber';
+import { Environment } from '@react-three/drei';
+import { Physics } from '@react-three/rapier';
 import * as THREE from 'three';
 import { Ground } from './Ground';
 import { Lighting } from './Lighting';
 import { SceneObjects } from './SceneObjects';
-import { Pointer3D } from '../UI/Pointer';
-import { CameraController } from '../Camera/CameraController';
+import { Pointer3D } from './Pointer3D';
+import { CameraController } from '@/components/Camera/CameraController';
 import { SCENE_CONFIG } from '@/types';
 
-// Component to capture and expose camera reference
-function CameraCapture({ onCameraReady }: { onCameraReady?: (camera: THREE.Camera) => void }) {
-  const { camera } = useThree();
-  
+
+function SceneCapture({
+  onReady,
+}: {
+  onReady?: (camera: THREE.Camera, scene: THREE.Scene) => void;
+}) {
+  const { camera, scene } = useThree();
   useEffect(() => {
-    console.log('CameraCapture: Camera available, calling onCameraReady');
-    onCameraReady?.(camera);
-  }, [camera, onCameraReady]);
-  
+    onReady?.(camera, scene);
+  }, [camera, scene, onReady]);
   return null;
 }
 
-function SceneContent({ onCameraReady }: { onCameraReady?: (camera: THREE.Camera) => void }) {
+
+function SceneContent({
+  onReady,
+}: {
+  onReady?: (camera: THREE.Camera, scene: THREE.Scene) => void;
+}) {
   return (
     <>
-      <CameraCapture onCameraReady={onCameraReady} />
+      <SceneCapture onReady={onReady} />
       <Lighting />
-      <Ground />
-      <SceneObjects />
+
+      <Physics gravity={[0, -9.81, 0]} debug={false}>
+        <Ground />
+        <SceneObjects />
+      </Physics>
+
       <Pointer3D />
       <CameraController />
-      
-      {/* Grid helper for visual reference */}
-      <gridHelper args={[20, 20, '#666666', '#444444']} position={[0, 0.01, 0]} />
+
+      {/* Grid for visual reference */}
+      <gridHelper args={[30, 30, '#555555', '#333333']} position={[0, 0.01, 0]} />
     </>
   );
 }
 
+
 interface SceneProps {
-  onCameraReady?: (camera: THREE.Camera) => void;
+  onReady?: (camera: THREE.Camera, scene: THREE.Scene) => void;
 }
 
-export function Scene({ onCameraReady }: SceneProps) {
-  const { camera } = SCENE_CONFIG;
+export function Scene({ onReady }: SceneProps) {
+  const cam = SCENE_CONFIG.camera;
 
   return (
     <div className="canvas-container">
       <Canvas
         shadows
-        camera={{
-          position: camera.position,
-          fov: camera.fov,
-          near: 0.1,
-          far: 1000,
-        }}
+        camera={{ position: cam.position as [number, number, number], fov: cam.fov, near: 0.1, far: 1000 }}
         gl={{
           antialias: true,
           toneMapping: THREE.ACESFilmicToneMapping,
@@ -65,24 +72,13 @@ export function Scene({ onCameraReady }: SceneProps) {
         }}
       >
         <color attach="background" args={['#1a1a2e']} />
-        <fog attach="fog" args={['#1a1a2e', 15, 35]} />
-        
+        <fog attach="fog" args={['#1a1a2e', 20, 45]} />
+
         <Suspense fallback={null}>
-          <SceneContent onCameraReady={onCameraReady} />
+          <SceneContent onReady={onReady} />
           <Environment preset="city" />
         </Suspense>
-
-        {/* Default orbit controls - will be overridden by gesture controls */}
-        <OrbitControls
-          enableDamping
-          dampingFactor={0.05}
-          minDistance={5}
-          maxDistance={30}
-          maxPolarAngle={Math.PI / 2 - 0.1}
-        />
       </Canvas>
     </div>
   );
 }
-
-export default Scene;
