@@ -4,43 +4,43 @@ overview: Build a complete 3D gesture sandbox from scratch using React 19, @reac
 todos:
   - id: scaffold
     content: Delete existing files, create package.json, tsconfig.json, tsconfig.node.json, vite.config.ts, index.html, .gitignore
-    status: pending
+    status: completed
   - id: types-constants
     content: Create src/types/index.ts and src/constants/shapes.ts with all type definitions, shape configs, and color mappings
-    status: pending
+    status: completed
   - id: context
     content: Create src/context/SandboxContext.tsx with useReducer state management and helper functions
-    status: pending
+    status: completed
   - id: gesture-engine
     content: Create src/engine/gestures.ts with pure gesture detection functions and src/engine/physics.ts for velocity tracking
-    status: pending
+    status: completed
   - id: hand-tracking
     content: Create src/hooks/useHandTracking.ts using @mediapipe/tasks-vision HandLandmarker
-    status: pending
+    status: completed
   - id: gesture-hook
     content: Create src/hooks/useGestureRecognition.ts - bridges hand landmarks to 3D interactions (grab, move, throw, camera orbit)
-    status: pending
+    status: completed
   - id: voice-hook
     content: Create src/hooks/useVoiceRecognition.ts with Web Speech API for create/delete/clear commands
-    status: pending
+    status: completed
   - id: scene-physics
     content: Create Scene.tsx (Canvas + Physics), Ground.tsx (static RigidBody), Lighting.tsx, PhysicsObject.tsx (dynamic RigidBody + collider + mesh)
-    status: pending
+    status: completed
   - id: scene-objects-pointer
     content: Create SceneObjects.tsx (maps state to PhysicsObject) and Pointer3D.tsx (3D pointer visualization)
-    status: pending
+    status: completed
   - id: camera
     content: Create CameraController.tsx with gesture-driven orbit and mouse fallback
-    status: pending
+    status: completed
   - id: ui-overlay
     content: Create Overlay.tsx, HandVisualization.tsx, StatusPanel.tsx, VoiceIndicator.tsx, Instructions.tsx
-    status: pending
+    status: completed
   - id: app-entry
     content: Create src/main.tsx, src/App.tsx (orchestration), src/styles.css
-    status: pending
+    status: completed
   - id: install-run
     content: Run npm install, start dev server, fix any TypeScript or runtime errors
-    status: pending
+    status: completed
 isProject: false
 ---
 
